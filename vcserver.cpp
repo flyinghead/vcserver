@@ -1,12 +1,42 @@
+/*
+	Game server for Visual Concepts Dreamcast games.
+    Copyright (C) 2025  Flyinghead
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
 #include "shared_this.h"
+extern "C" {
 #include "blowfish.h"
+}
 #include "vcserver.h"
 #include "discord.h"
-#include "asio.hpp"
+#include <signal.h>
+#include <asio.hpp>
+#include <stdio.h>
 #include <string>
 #include <array>
 #include <vector>
 #include <functional>
+#include <algorithm>
+
+#if ASIO_VERSION < 102900
+namespace asio::placeholders
+{
+static inline constexpr auto& error = std::placeholders::_1;
+static inline constexpr auto& bytes_transferred = std::placeholders::_2;
+}
+#endif
 
 // server IP: 146.185.135.179
 //            92  b9  87  b3
@@ -107,6 +137,7 @@
 
 std::string RegionName = "DCNet World";
 std::string LobbyName = "DCNet";
+asio::io_context io_context;
 
 class Connection;
 
@@ -229,6 +260,7 @@ public:
 				std::vector<std::string> userNames;
 				for (const auto& user : users)
 					userNames.push_back(user->name);
+				std::sort(userNames.begin(), userNames.end());
 				discordGameCreated(gameType, user->name, userNames);
 
 				return &games.back();
@@ -278,7 +310,7 @@ public:
 
 	void sendUser(int idx)
 	{
-		if (lobby->gameType == NFL2K1 || lobby->gameType == NBA2K1) {
+		if (is2K1()) {
 			respond(301);
 			respByte(1);
 		}
@@ -290,9 +322,14 @@ public:
 		printf("Sending user[%d] %s\n", user->userId, user->name.c_str());
 		respShort(user->userId);
 		respStr(user->name);
-		asio::ip::address_v4 address = user->connection->address();
-		respData(address.to_bytes());
-		if (lobby->gameType != NFL2K1 || lobby->gameType != NBA2K1) {
+		try {
+			asio::ip::address_v4 address = user->connection->address();
+			respData(address.to_bytes());
+		} catch (const std::system_error& e) {
+			// connection might have been closed
+			respLong(0);
+		}
+		if (!is2K1()) {
 			respShort(user->record.size());
 			respData(user->record);
 		}
@@ -331,7 +368,7 @@ public:
 
 	void sendUserLeave(uint16_t userId)
 	{
-		if (lobby->gameType == NFL2K1 || lobby->gameType == NBA2K1)
+		if (is2K1())
 			respond(203);
 		else
 			respond(213);
@@ -341,7 +378,12 @@ public:
 
 private:
 	Connection(asio::io_context& io_context, std::shared_ptr<Lobby> lobby)
-		: io_context(io_context), socket(io_context), lobby(lobby) {
+		: io_context(io_context), socket(io_context),
+		  lobby(lobby), gameType(lobby ? lobby->gameType : UNKNOWN) {
+	}
+
+	bool is2K1() const {
+		return gameType == NFL2K1 || gameType == NBA2K1;
 	}
 
 	void send()
@@ -367,7 +409,7 @@ private:
 	{
 		if (ec)
 		{
-			fprintf(stderr, "Write error: %s\n", ec.message().c_str());
+			fprintf(stderr, "ERROR: onSent: %s\n", ec.message().c_str());
 			lobbyLeave();
 			return;
 		}
@@ -390,9 +432,6 @@ private:
 		iterator i = begin;
 		uint16_t len = (uint8_t)*i++;
 		len |= uint8_t(*i++) << 8;
-		if (end - begin == len - 1 && len >= 0xec)
-			// HACK for IGP bug
-			return std::make_pair(end, true);
 		if (end - begin < len)
 			return std::make_pair(begin, false);
 		return std::make_pair(begin + len, true);
@@ -403,7 +442,7 @@ private:
 		if (ec || len == 0)
 		{
 			if (ec && ec != asio::error::eof)
-				fprintf(stderr, "ERROR: %s\n", ec.message().c_str());
+				fprintf(stderr, "ERROR: onReceive: %s\n", ec.message().c_str());
 			else
 				printf("Connection closed\n");
 			lobbyLeave();
@@ -427,6 +466,9 @@ private:
 		case 5012:		// UserCreate
 			userCreate();
 			break;
+		case 5002:		// nfl 2k1
+			userCreate2k1();
+			break;
 
 		// Record server
 		case 7002:		// RecordRetrieve
@@ -445,6 +487,12 @@ private:
 			break;
 		case 4002:		// get lobby servers
 			getLobbies();
+			break;
+		case 50:		// find user
+			findUser();
+			break;
+		case 400:		// find user 2k1
+			findUser();
 			break;
 
 		// Lobby server
@@ -470,9 +518,6 @@ private:
 			break;
 		case 500:		// chat message
 			chatSent();
-			break;
-		case 50:		// find user
-			findUser();
 			break;
 		case 62:
 			lobbyUserList();
@@ -511,18 +556,29 @@ private:
 	{
 		printf("keychal %x ", data[1]);
 		int n = data[0] + 1;		// skip key challenge
-		uint16_t len = *(uint16_t *)&data[n];
-		n += 2;
-		/* normal
-		//uint32_t key = gameId >= 6 ? 1 : 0x2f;	// ooga,wsb2k2:2f, nfl2k1,IGP:4b, nfl2k2,nba2k2,floigan:1, nba2k1:60, record server: 1?
-		uint32_t key = Keys[gameId];
 
-		BLOWFISH_CTX ctx{};
-		Blowfish_Init(&ctx, (uint8_t *)&key, sizeof(key));
-		int sz = decrypt(&ctx, &recvBuffer[n], len);
-		std::string username = recvStr(&recvBuffer[n - 2]);
-		*/
-		// Search key
+		uint8_t *puser = &data[n];
+		uint16_t userlen = *(uint16_t *)puser;
+		n += 2;
+		int cuserlen = (userlen + 7) / 8 * 8;
+		n += cuserlen;
+		uint8_t tmpuser[18];
+
+		uint8_t *ppassword = &data[n];
+		uint16_t passwordlen = *(uint16_t *)ppassword;
+		n += 2;
+		int cpasswordlen = (passwordlen + 7) / 8 * 8;
+		n += cpasswordlen;
+		uint8_t tmppassword[18];
+
+		if (userlen > 16 || passwordlen > 16)
+		{
+			fprintf(stderr, "ERROR: username or password too long (%d, %d)\n", userlen, passwordlen);
+			username.clear();
+			password.clear();
+			return n;
+		}
+
 		// ooga key schedule:
 		// var4	key
 		// 29	2f
@@ -543,101 +599,52 @@ private:
 		// 12	16
 		//
 		BLOWFISH_CTX ctx{};
-		int sz;
 		// 1f 00 92 13 02 00 04 2b 00 00 00 06 00 a9 60 29 07 a9 f5 4c a1 06 00 a7 c9 d2 03 53 f8 eb 2b
 
+		// Brute-force crack the encryption key since it's only 8 bits.
+		// A smarter way would be to derive the key from the included key challenge, which is probably what
+		// the original server does.
 		uint32_t key = 0;
 		for (; key < 0x100; key++)
 		{
 			ctx = {};
 			Blowfish_Init(&ctx, (uint8_t *)&key, sizeof(key));
-			uint8_t userSave[128];
-			int userlen = (len + 7) / 8 * 8;
-			memcpy(userSave, &data[n], userlen);
-			sz = decrypt(&ctx, &data[n], len);
-			username = recvStr(&data[n - 2]);
+			memcpy(tmpuser, puser, cuserlen + 2);
+			decrypt(&ctx, tmpuser + 2, userlen);
+			username = recvStr(tmpuser);
 
-			uint8_t passwordSave[128];
-			int passwordlen = *(uint16_t *)&data[n + userlen];
-			passwordlen = (passwordlen + 7) / 8 * 8;
-			memcpy(passwordSave, &data[n + userlen + 2], passwordlen);
-			sz = decrypt(&ctx, &data[n + userlen + 2], *(uint16_t *)&data[n + userlen]);
-			password = recvStr(&data[n + userlen]);
-			sz = userlen + passwordlen + 2;
+			memcpy(tmppassword, ppassword, cpasswordlen + 2);
+			decrypt(&ctx, tmppassword + 2, passwordlen);
+			password = recvStr(tmppassword);
 
 			if (validLoginString(username) && validLoginString(password))
 				break;
-			memcpy(&data[n], userSave, userlen);
-			memcpy(&data[n + userlen + 2], passwordSave, passwordlen);
 		}
-		// end search key
-		printf("key %x username/password: %s/%s\n", key, username.c_str(), password.c_str());
-		return n + sz;
+		if (key == 0x100) {
+			fprintf(stderr, "ERROR: can't find the encryption key\n");
+			username.clear();
+			password.clear();
+		}
+		else {
+			printf("key %x username/password: %s/%s\n", key, username.c_str(), password.c_str());
+		}
+		return n;
 	}
 
-	void userLogin()
+	void loginFailure(const std::string& msg)
 	{
-		int gameId = recvShort(4);
-		printf("Login: game %d ", gameId);
-		std::string username, password;
-		recvLoginPassword(&recvBuffer[6], username, password);
-
 		respond(5013);
-		respShort(0);		// success?
-		respStr(username);
-		respShort(8);
-		respSkip(7);
-		respByte(8);
-		send();
 		// Invalid username/password:
 		// 36 00 95 13 01 00 1b 00  49 6e 63 6f 72 72 65 63   6....... Incorrec
 	    // 74 20 75 73 65 72 6e 61  6d 65 2f 70 61 73 73 77   t userna me/passw
 	    // 6f 72 64 08 01 00 00 00  00 00 00 00 08 00 36 10   ord..... ......6.
 	    // fd 38 65 26 f5 7d
-	}
-
-	void userLogin2K1()
-	{
-		// msg 5004: (nba 2k1)
-		// 1f 00 8c 13 04 06 00 00 00 06 00 69 8b ac aa 1c 31 6d fa 06 00 b8 84 ba cc d6 a5 3b 9d 01 00
-		//             l  'var4)      len   encrypted string....... len   encrypted string.......
-		// msg 5000: (nfl 2k1)
-		// 2d 00 88 13 04 38 00 00 00 0a 00 16 c7 e6 56 02 f7 1b 70 d1 e3 f8 89 01 e9 d9 95 09 00 b4 0f 5b 01 3a df 05 e1 0e 19 7e 83 70 d1 95 5b
-		// resp: 5003
-		// 10 00 8b 13 01 00 08 00  00 00 00 00 00 00 00 08
-		printf("Login(500x) 2K1 ");
-		std::string username, password;
-		recvLoginPassword(&recvBuffer[4], username, password);
-
-		respond(5003);
-		respShort(1);
-		respShort(8);
-		respSkip(7);
-		respByte(8);
-		send();
-	}
-
-	void userCreate()
-	{
-		// 21 00 94 13 02 00 00 00 04 29 00 00 00 06 00 29 d6 60 bf 28 1e 28 aa 06 00 ed c3 ef 36 3c dc 15 97
-		//             gameId      l  var4        len   user-name.............. len   password...............
-		// response:
-		// 21 00 95 13 00 00 06 00  6c 6c 6c 6c 6c 6c 08 01   !....... llllll..
-		// 00 00 00 00 00 00 00 08  00 36 10 fd 38 65 26 f5   ........ .6..8e&.
-		// 7d
-		int gameId = recvShort(4);
-		std::string username, password;
-		recvLoginPassword(&recvBuffer[8], username, password);
-		printf("Create user: game %d login %s password %s\n", gameId, username.c_str(), password.c_str());
-
-		respond(5013);
-		respShort(0);
-		respStr(username);
+		respShort(1);	// failure
+		respStr(msg);
 		respByte(8);
 		respByte(1);
 		respSkip(7);
-		respByte(8);
-		respByte(0);
+		respShort(8);
 		respByte(0x36);
 		respByte(0x10);
 		respByte(0xfd);
@@ -649,6 +656,152 @@ private:
 		send();
 	}
 
+	void userLogin()
+	{
+		int gameId = recvShort(4);
+		printf("Login: game %d ", gameId);
+		std::string username, password;
+		recvLoginPassword(&recvBuffer[6], username, password);
+
+		if (!username.empty() && !password.empty())
+		{
+			respond(5013);
+			respShort(0);		// success?
+			respStr(username);
+			respShort(8);
+			respSkip(7);
+			respByte(8);
+			send();
+		}
+		else {
+			loginFailure("Authentication error");
+		}
+	}
+
+	void userLogin2K1()
+	{
+		// msg 5004: (nba 2k1)
+		// 1f 00 8c 13 04 06 00 00 00 06 00 69 8b ac aa 1c 31 6d fa 06 00 b8 84 ba cc d6 a5 3b 9d 01 00
+		//             l  key chal    len   encrypted string....... len   encrypted string.......
+		// msg 5000: (nfl 2k1)
+		// 2d 00 88 13 04 38 00 00 00 0a 00 16 c7 e6 56 02 f7 1b 70 d1 e3 f8 89 01 e9 d9 95 09 00 b4 0f 5b 01 3a df 05 e1 0e 19 7e 83 70 d1 95 5b
+		// resp: 5003
+		// 10 00 8b 13 01 00 08 00  00 00 00 00 00 00 00 08
+		printf("Login(500x) 2K1 ");
+		std::string username, password;
+		recvLoginPassword(&recvBuffer[4], username, password);
+
+		if (!username.empty() && !password.empty())
+		{
+			respond(5003);
+			respShort(1);
+			respShort(8);
+			respSkip(7);
+			respByte(8);
+		}
+		else
+		{
+			// not working either
+			respond(0xffff);
+			respLong(0);
+
+			// FIXME doesn't work. Need actual net dump.
+			// nfl 2K1:
+			// readShort	if 0 -> success
+			//   readString		user name?
+			//   readString		password?
+			//              else
+			//   readString		error message?
+			//respond(5003);
+			//respShort(1);	// error
+			//respStr("Authentication error POUET");
+		}
+		send();
+	}
+
+	void userCreate()
+	{
+		// 21 00 94 13 02 00 00 00 04 29 00 00 00 06 00 29 d6 60 bf 28 1e 28 aa 06 00 ed c3 ef 36 3c dc 15 97
+		//             gameId      l  key chal    len   user-name.............. len   password...............
+		// response:
+		// 21 00 95 13 00 00 06 00  6c 6c 6c 6c 6c 6c 08 01   !....... llllll..
+		// 00 00 00 00 00 00 00 08  00 36 10 fd 38 65 26 f5   ........ .6..8e&.
+		// 7d
+		int gameId = recvShort(4);
+		std::string username, password;
+		recvLoginPassword(&recvBuffer[8], username, password);
+		printf("Create user: game %d login %s password %s\n", gameId, username.c_str(), password.c_str());
+
+		if (!username.empty() && !password.empty())
+		{
+			respond(5013);
+			respShort(0);
+			respStr(username);
+			respByte(8);
+			respByte(1);
+			respSkip(7);
+			respShort(8);
+			respByte(0x36);
+			respByte(0x10);
+			respByte(0xfd);
+			respByte(0x38);
+			respByte(0x65);
+			respByte(0x26);
+			respByte(0xf5);
+			respByte(0x7d);
+			send();
+		}
+		else {
+			loginFailure("User creation failed");
+		}
+	}
+
+	void userCreate2k1()
+	{
+		// 28 00 8a 13 05 00 70 61 72 69 73 02 00 66 72 04 (.....paris..fr.
+		//                   city                 state
+		// 27 00 00 00 06 00 47 a4 fb 5d c2 d7 80 fd 06 00 '.....G..]......
+		//                   user name
+		// c6 89 32 d2 7b 7c f1 09                         ..2.{|..
+		// password
+		// no city and state:
+		// 21 00 8a 13 00 00 00 00 04 19 00 00 00 06 00 cb !...............
+		//             city sz     key chal       username
+		//                  state sz
+		// ee c2 eb b3 34 4c 70 06 00 ea aa 2b 57 ff ba 68 ....4Lp....+W..h
+		//                            password
+		// ac                                              .
+
+		size_t n = 4;
+		std::string city = recvStr(n);
+		n += 2 + city.length();
+		std::string state = recvStr(n);
+		n += 2 + state.length();
+		std::string username, password;
+		recvLoginPassword(&recvBuffer[n], username, password);
+		printf("Create user 2k1: login %s password %s city %s state %s\n", username.c_str(), password.c_str(),
+				city.c_str(), state.c_str());
+		respond(5003);
+		if (!username.empty() && !password.empty())
+		{
+			respShort(1);
+			respShort(8);
+			respSkip(7);
+			respByte(8);
+		}
+		else
+		{
+			// FIXME doesn't work. Need actual net dump.
+			respShort(2);	// ???
+			respStr("Authentication error");
+			respByte(8);
+			respByte(1);
+			respSkip(7);
+			respShort(8);
+		}
+		send();
+	}
+
 	void recordRetrieve()
 	{
 		// 25 00
@@ -656,11 +809,11 @@ private:
 		printf("User record: ");
 		std::string username, password;
 		recvLoginPassword(&recvBuffer[4], username, password);
-
+		// TODO check username password are valid
 		respond(7003);
 		respShort(0);
 		uint16_t recordSize = 16;
-		if (lobby->gameType == IGP)
+		if (gameType == IGP)
 			recordSize = 256;
 		respShort(recordSize);
 		respSkip(recordSize);
@@ -673,13 +826,14 @@ private:
 		std::string username, password;
 		int n = 4;
 		n += recvLoginPassword(&recvBuffer[n], username, password);
+		// TODO check username password are valid
 		// when game starts
 		// 2f 00 5e 1b 04 3f 00 00 00 07 00 25 a4 49 15 96 3a 3a 7d 06 00 ee 34 49 5c 6b 1a d4 30
-		//             l  var4        len   encrypted               len   encrypted           ...
+		//             l  key chal    len   encrypted               len   encrypted           ...
 		//    10 00 00 00 00 00 01 00 00 00 00 00 00 00 01 00 00 00
 		//    len   params?                             in-game
 		// 37 00 5e 1b 04 24 00 00 00 0a 00 d3 67 e8 01 5d 9f 1d e7 b7 5e 19 06 b6 6d a4 06 00 b8 24 63 f4 b6 ee a2 88
-		//             l  var4        len   encrypted                                ... len   encrypted           ...
+		//             l  key chal    len   encrypted                                ... len   encrypted           ...
 		//    10 00 00 00 00 00 01 00 00 00 00 00 00 00 01 00 00 00
 		//    len   params                              in-game
 		// resp:
@@ -687,13 +841,13 @@ private:
 		// 5b 1b 01 00 10 00  00 00 00 00 01 00 00 00 00 00 00 00 01 00 00 00
 		respond(7003);
 		uint16_t recordSize;
-		if (lobby->gameType == IGP) {
+		if (gameType == IGP) {
 			respShort(0);
 			recordSize = 256;
 		}
 		else
 		{
-			if (lobby->gameType == OOOGABOOGA)
+			if (gameType == OOOGABOOGA)
 				// oogabooga returns 1 here
 				respShort(1);
 			else
@@ -733,20 +887,18 @@ private:
 		//          12 bytes data
 		// end:
 		// 00 00
-		// TODO
-		/*
 		respond(7015);
-		respShort(2);
-		//respByte(0xb2);	// ?
-		respByte(0);	// anything other than 0 makes the game crash
-		// list...
-		for (int i = 0; i < 50; i++) {
-			respStr("TODO");
-			respSkip(12);
-		}
-		respByte(0);
-		send();
+		respShort(2);	// ignored?
+		respByte(0x80);	// 0x80: success
+						// | 0-50: number of records
+		/*
+		respStr("TODOTODO");
+		respLong(1);	// wins
+		respLong(2);	// losses
+		respLong(3);	// nfl2k2,nba2k2:drops
+		respLong(4);	// wsb2k2:drops
 		*/
+		send();
 	}
 
 	void getRegions()
@@ -756,8 +908,8 @@ private:
 	    // 6e 00 00 00 00 00 00
 		printf("Get regions: len %d\n", recvShort(0));
 		respond(4001);
-		if (lobby->gameType == NFL2K1 || lobby->gameType == NBA2K1)
-			respByte(1);
+		if (is2K1())
+			respByte(1);	// number of regions: { string name, long user count }
 		else
 			respByte(0x81);
 		respStr(RegionName);
@@ -775,7 +927,7 @@ private:
 		printf("Get lobby servers: region %s\n", region.c_str());
 
 		respond(4003);
-		if (lobby->gameType == NFL2K1 || lobby->gameType == NBA2K1) {
+		if (is2K1()) {
 			respByte(1);
 		}
 		else {
@@ -791,12 +943,54 @@ private:
 		send();
 	}
 
+	void findUser()
+	{
+		// 0c 00 32 00 06 00 61 62 63 64 65 66 ..2...abcdef
+		std::string userName = recvStr(&recvBuffer[4]);
+		for (const User::Ptr& user : lobby->users)
+		{
+			if (user->name == userName)
+			{
+				printf("Found user: %s\n", userName.c_str());
+				if (is2K1()) {
+					respond(401);
+					respLong(1);	// success
+				}
+				else
+				{
+					respond(51);
+					respShort(0);	// success
+					respLong(1);	// NFL2K2 needs 1
+				}
+				respStr(RegionName);
+				respStr(LobbyName);
+				respData(socket.local_endpoint().address().to_v4().to_bytes());
+				respShort(htons(socket.local_endpoint().port() + 1));
+				send();
+				return;
+			}
+		}
+		printf("User not found: %s\n", userName.c_str());
+		if (is2K1()) {
+			respond(401);
+			respLong(0);	// error
+		}
+		else
+		{
+			respond(51);
+			respShort(1);	// error
+			respStr("User not found in any lobby");
+		}
+		send();
+	}
+
 	void notifyLobbyRegister(const std::string& user)
 	{
 		std::vector<std::string> users;
 		for (const auto& user : lobby->users)
 			users.push_back(user->name);
-		discordLobbyJoined(lobby->gameType, user, users);
+		std::sort(users.begin(), users.end());
+		discordLobbyJoined(gameType, user, users);
 	}
 
 	void lobbyRegister()
@@ -808,7 +1002,7 @@ private:
 		// record sizes vary: floigan?:0, nfl2k2:20, others:16
 		printf("Enter lobby: user %s record: %d bytes\n", userName.c_str(), recordSize);
 
-		if (lobby->gameType == OOOGABOOGA) {
+		if (gameType == OOOGABOOGA) {
 			lobbyUserList();
 		}
 		else
@@ -943,48 +1137,10 @@ private:
 		// 0a 00 f4 01 01 00 01 01 00 73
 		// 2k1:
 		// 0b 00 f4 01 01 00 03 00 6c 6f 6c
-		int n = lobby->gameType == NFL2K1 || lobby->gameType == NBA2K1 ? 6 : 7;
+		int n = is2K1() ? 6 : 7;
 		std::string chat = recvStr(&recvBuffer[n]);
 		printf("Chat from %s: %s\n", user->name.c_str(), chat.c_str());
 		lobby->sendChat(user, chat);
-	}
-
-	void findUser()
-	{
-		// 0c 00 32 00 06 00 61 62 63 64 65 66 ..2...abcdef
-		std::string userName = recvStr(&recvBuffer[4]);
-		// resp:
-		// search in region selection -> error
-		// search in server selection -> ok
-		// 26 00 33 00 01 00 00 00  00 00 0a 00 53 68 75 6f   &.3..... ....Shuo
-	    // 47 61 72 64 65 6e 08 00  53 68 75 6d 61 6e 69 61   Garden.. Shumania
-	    // 92 b9 87 b3 3b 64                                  ....;d
-		for (const User::Ptr& user : lobby->users)
-		{
-			if (user->name == userName)
-			{
-				printf("Found user: %s\n", userName.c_str());
-				respond(51);
-				respShort(1);
-				respSkip(4);
-				respStr(RegionName);
-				respStr(LobbyName);
-				respData(socket.local_endpoint().address().to_v4().to_bytes());
-				respShort(htons(socket.local_endpoint().port() + 1));
-				send();
-				// FIXME games error out. why?
-				return;
-			}
-		}
-		// FIXME what's a negative response?
-		// 02 00 					makes nfl2K2 reboot...
-		// 01 00 00 00 00 00 00 00	nfl2k2, nba2K2 ok: "player" is not currently in a lobby
-		//							ooga: error
-		printf("User not found: %s\n", userName.c_str());
-		respond(51);
-		respShort(1);	// 0,1:found 2:error
-		respSkip(6);
-		send();
 	}
 
 	void respond(uint16_t type)
@@ -1026,11 +1182,14 @@ private:
 		sendIdx += str.length();
 	}
 
-	std::string recvStr(const uint8_t *data)
-	{
+	std::string recvStr(const uint8_t *data) {
 		int len = *(uint16_t *)data;
 		return std::string(data + 2, data + 2 + len);
 	}
+	std::string recvStr(size_t offset) {
+		return recvStr(&recvBuffer[offset]);
+	}
+
 	uint16_t recvShort(size_t offset) {
 		return *(uint16_t *)&recvBuffer[offset];
 	}
@@ -1086,6 +1245,7 @@ private:
 
 	std::shared_ptr<Lobby> lobby;
 	User::Ptr user;
+	GameType gameType;
 
 	friend super;
 };
@@ -1158,10 +1318,22 @@ private:
 	friend super;
 };
 
+static void breakhandler(int signum)
+{
+	io_context.stop();
+}
+
 int main(int argc, char *argv[])
 {
+	struct sigaction sigact;
+	memset(&sigact, 0, sizeof(sigact));
+	sigact.sa_handler = breakhandler;
+	sigact.sa_flags = SA_RESTART;
+	sigaction(SIGINT, &sigact, NULL);
+	sigaction(SIGTERM, &sigact, NULL);
+
+	setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
 	printf("VC game server starting\n");
-	asio::io_context io_context;
 
 	// ooga, floigan, IGP, 2k2 games
 	Server::Ptr authAcceptor = Server::create(io_context, 11000);
@@ -1205,6 +1377,8 @@ int main(int argc, char *argv[])
 	servers.back()->start();
 
 	io_context.run();
+
+	printf("VC game server stopping\n");
 
 	return 0;
 }

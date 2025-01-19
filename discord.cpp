@@ -1,3 +1,20 @@
+/*
+	Game server for Visual Concepts Dreamcast games.
+    Copyright (C) 2025  Flyinghead
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
 #include "discord.h"
 #include <curl/curl.h>
 #include "json.hpp"
@@ -10,15 +27,15 @@ struct {
 } Games[] = {
 	{ },
 	{ },
-	{ "Ooga Booga", "https://dcnet.flyca.st/gamepic/oogabooga.jpg" },
-	{ "Internet Game Pack", "https://dcnet.flyca.st/gamepic/igp.jpg" },
-	{ "Floigan Bros", "https://dcnet.flyca.st/gamepic/floigan.jpg" },
-	{ "World Series Baseball 2K2", "https://dcnet.flyca.st/gamepic/wsb2k2.jpg" },
-	{ "NBA 2K2", "https://dcnet.flyca.st/gamepic/nba2k2.jpg" },
-	{ "NFL 2K2", "https://dcnet.flyca.st/gamepic/nfl2k2.jpg" },
-	{ "NCAA 2K2", "https://dcnet.flyca.st/gamepic/ncaa2k2.jpg" },
-	{ "NFL 2K1", "https://dcnet.flyca.st/gamepic/nfl2k1.jpg" },
-	{ "NBA 2K1", "https://dcnet.flyca.st/gamepic/nba2k1.jpg" },
+	{ "Ooga Booga",					"https://dcnet.flyca.st/gamepic/oogabooga.jpg" },
+	{ "Internet Game Pack",			"https://dcnet.flyca.st/gamepic/igp.jpg" },
+	{ "Floigan Bros",				"https://dcnet.flyca.st/gamepic/floigan.jpg" },
+	{ "World Series Baseball 2K2",	"https://dcnet.flyca.st/gamepic/wsb2k2.jpg" },
+	{ "NBA 2K2", 					"https://dcnet.flyca.st/gamepic/nba2k2.jpg" },
+	{ "NFL 2K2", 					"https://dcnet.flyca.st/gamepic/nfl2k2.jpg" },
+	{ "NCAA 2K2", 					"https://dcnet.flyca.st/gamepic/ncaa2k2.jpg" },
+	{ "NFL 2K1", 					"https://dcnet.flyca.st/gamepic/nfl2k1.jpg" },
+	{ "NBA 2K1", 					"https://dcnet.flyca.st/gamepic/nba2k1.jpg" },
 };
 
 class Notif
@@ -61,7 +78,7 @@ char DiscordWebhook[256];
 
 static void postWebhook(const Notif& notif)
 {
-	if (DiscordWebhook[0] == '\0' || notif.gameType < OOOGABOOGA)
+	if (DiscordWebhook[0] == '\0' || notif.gameType < OOOGABOOGA || notif.gameType >= std::size(Games))
 		return;
 	CURL *curl = curl_easy_init();
 	if (curl == nullptr) {
@@ -95,7 +112,7 @@ static void postWebhook(const Notif& notif)
 void discordLobbyJoined(GameType gameType, const std::string& username, const std::vector<std::string>& playerList)
 {
 	Notif notif(gameType);
-	notif.content = "Player **" + username + "** entered the lobby";
+	notif.content = "Player **" + username + "** joined the lobby";
 	notif.embed.title = "Lobby Players";
 	for (const auto& player : playerList)
 		notif.embed.text += player + "\n";

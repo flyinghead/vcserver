@@ -1,10 +1,19 @@
-#CPPFLAGS= -std=c++17 -I/home/raph/flycast-dev-clean/core/deps/asio/asio/include -g -Wall -fsanitize=address -static-libasan
-CPPFLAGS= -std=c++17 -I/home/raph/flycast-dev-clean/core/deps/asio/asio/include -O3 -Wall
+# deps: libcurl-dev libasio-dev
+CFLAGS = -O3 -Wall
+#CFLAGS = -g -Wall -fsanitize=address
+CXXFLAGS = $(CFLAGS) -std=c++17 -I/home/raph/flycast-dev-clean/core/deps/asio/asio/include
+DEPS = blowfish.h discord.h json.hpp vcserver.h
 
 all: vcserver
 
-vcserver: vcserver.cpp discord.cpp
-	c++ $(CPPFLAGS) vcserver.cpp discord.cpp blowfish.c -o vcserver -lpthread -lcurl
+vcserver: vcserver.o discord.o blowfish.o
+	$(CXX) $(CXXFLAGS) vcserver.o discord.o blowfish.o -o vcserver -lpthread -lcurl
+
+%.o: %.cpp $(DEPS)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+%.o: %.c $(DEPS)
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
 	rm -f vcserver *.o
