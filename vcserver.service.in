@@ -1,0 +1,16 @@
+[Unit]
+Description=Visual Concepts Server
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=INSTALL_USER
+WorkingDirectory=INSTALL_DIR
+ExecStart=INSTALL_DIR/vcserver
+StandardOutput=append:INSTALL_DIR/vcserver.log
+
+[Install]
+WantedBy=multi-user.target

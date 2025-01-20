@@ -19,6 +19,8 @@
 #include <curl/curl.h>
 #include "json.hpp"
 
+static std::string DiscordWebhook;
+
 using namespace nlohmann;
 
 struct {
@@ -73,12 +75,9 @@ public:
 	} embed;
 };
 
-// TODO config file
-char DiscordWebhook[256];
-
 static void postWebhook(const Notif& notif)
 {
-	if (DiscordWebhook[0] == '\0' || notif.gameType < OOOGABOOGA || notif.gameType >= std::size(Games))
+	if (DiscordWebhook.empty() || notif.gameType < OOOGABOOGA || notif.gameType >= std::size(Games))
 		return;
 	CURL *curl = curl_easy_init();
 	if (curl == nullptr) {
@@ -86,7 +85,7 @@ static void postWebhook(const Notif& notif)
 		return;
 	}
 	CURLcode res;
-	curl_easy_setopt(curl, CURLOPT_URL, DiscordWebhook);
+	curl_easy_setopt(curl, CURLOPT_URL, DiscordWebhook.c_str());
 	curl_easy_setopt(curl, CURLOPT_USERAGENT, "DCNet-DiscordWebhook");
 	curl_slist *headers = curl_slist_append(NULL, "Content-Type: application/json");
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -107,6 +106,11 @@ static void postWebhook(const Notif& notif)
 	}
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
+}
+
+void setDiscordWebhook(const std::string& url)
+{
+	DiscordWebhook = url;
 }
 
 void discordLobbyJoined(GameType gameType, const std::string& username, const std::vector<std::string>& playerList)

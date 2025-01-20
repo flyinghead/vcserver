@@ -16,6 +16,9 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 #pragma once
+#include <stdint.h>
+#include <vector>
+#include <string>
 
 enum GameType
 {
@@ -31,3 +34,17 @@ enum GameType
 	NFL2K1 = 9,
 	NBA2K1 = 10,
 };
+
+struct HighScore {
+	std::string name;
+	int wins;
+	int losses;
+	int data3;
+	int data4;
+};
+
+void setDatabasePath(const std::string& databasePath);
+void closeDatabase();
+std::vector<uint8_t> getUserRecord(const std::string& name, GameType gameType);
+void saveUserRecord(const std::string& name, GameType gameType, const uint8_t *data, int size);
+std::vector<HighScore> getHighScores(GameType gameType);

@@ -29,6 +29,9 @@ extern "C" {
 #include <vector>
 #include <functional>
 #include <algorithm>
+#include <fstream>
+#include <sstream>
+#include <unordered_map>
 
 #if ASIO_VERSION < 102900
 namespace asio::placeholders
@@ -135,9 +138,10 @@ static inline constexpr auto& bytes_transferred = std::placeholders::_2;
 // 0a 00
 // d4 00 02 00 00 00 00 00
 
-std::string RegionName = "DCNet World";
-std::string LobbyName = "DCNet";
-asio::io_context io_context;
+static std::string RegionName = "DCNet World";
+static std::string LobbyName = "DCNet";
+static asio::io_context io_context;
+static std::unordered_map<std::string, std::string> Config;
 
 class Connection;
 
@@ -810,13 +814,23 @@ private:
 		std::string username, password;
 		recvLoginPassword(&recvBuffer[4], username, password);
 		// TODO check username password are valid
+		std::vector<uint8_t> record = getUserRecord(username, gameType);
 		respond(7003);
 		respShort(0);
-		uint16_t recordSize = 16;
-		if (gameType == IGP)
-			recordSize = 256;
-		respShort(recordSize);
-		respSkip(recordSize);
+		if (record.empty())
+		{
+			uint16_t recordSize = 16;
+			if (gameType == IGP)
+				recordSize = 256;
+			else if (gameType == NBA2K2)
+				recordSize = 12;
+			respShort(recordSize);
+			respSkip(recordSize);
+		}
+		else {
+			respShort(record.size());
+			respData(record);
+		}
 		send();
 	}
 
@@ -827,6 +841,9 @@ private:
 		int n = 4;
 		n += recvLoginPassword(&recvBuffer[n], username, password);
 		// TODO check username password are valid
+		uint16_t recordSize = recvShort(n);
+		n += 2;
+		saveUserRecord(username, gameType, &recvBuffer[n], recordSize);
 		// when game starts
 		// 2f 00 5e 1b 04 3f 00 00 00 07 00 25 a4 49 15 96 3a 3a 7d 06 00 ee 34 49 5c 6b 1a d4 30
 		//             l  key chal    len   encrypted               len   encrypted           ...
@@ -840,28 +857,17 @@ private:
 		// 18 00
 		// 5b 1b 01 00 10 00  00 00 00 00 01 00 00 00 00 00 00 00 01 00 00 00
 		respond(7003);
-		uint16_t recordSize;
-		if (gameType == IGP) {
-			respShort(0);
-			recordSize = 256;
-		}
+		if (gameType == OOOGABOOGA)
+			// oogabooga returns 1 here
+			respShort(1);
 		else
-		{
-			if (gameType == OOOGABOOGA)
-				// oogabooga returns 1 here
-				respShort(1);
-			else
-				// other games want 0
-				respShort(0);
-			recordSize = 16;
-		}
-		// nba 2K2 receives a 12-byte update and respond with 16 bytes
-		uint16_t inSize = recvShort(n);
-		n += 2;
+			// other games want 0
+			respShort(0);
+		// ooga,wsb2k2 sends 4 longs
+		// nba2k2 sends 3 longs
+		// IGP sends 4 or 5 (wins,losses,drops,rating,awards?) * 6 (games) longs? -> 120 bytes
 		respShort(recordSize);
-		respBytes(&recvBuffer[n], std::min(recordSize, inSize));
-		if (recordSize > inSize)
-			respSkip(recordSize - inSize);
+		respBytes(&recvBuffer[n], recordSize);
 		send();
 	}
 
@@ -887,17 +893,20 @@ private:
 		//          12 bytes data
 		// end:
 		// 00 00
+		std::vector<HighScore> hiScores = getHighScores(gameType);
 		respond(7015);
-		respShort(2);	// ignored?
-		respByte(0x80);	// 0x80: success
-						// | 0-50: number of records
-		/*
-		respStr("TODOTODO");
-		respLong(1);	// wins
-		respLong(2);	// losses
-		respLong(3);	// nfl2k2,nba2k2:drops
-		respLong(4);	// wsb2k2:drops
-		*/
+		respShort(2);						// must be 2 (nba2k2)
+		respByte(0x80 | hiScores.size());	// 0x80: success
+											// | 0-50: number of records
+		for (HighScore hs : hiScores)
+		{
+			respStr(hs.name);
+			respLong(hs.wins);		// wins
+			respLong(hs.losses);	// losses
+			respLong(hs.data3);		// nfl2k2,nba2k2,ncaa2k2:drops
+			if (hs.data4 != -1)
+				respLong(hs.data4);		//wsb2k2:drops, not for nba2K2
+		}
 		send();
 	}
 
@@ -1318,9 +1327,40 @@ private:
 	friend super;
 };
 
-static void breakhandler(int signum)
-{
+static void breakhandler(int signum) {
 	io_context.stop();
+}
+
+static void loadConfig(const std::string& path)
+{
+	std::filebuf fb;
+	if (!fb.open(path, std::ios::in)) {
+		fprintf(stderr, "ERROR: config file %s not found\n", path.c_str());
+		return;
+	}
+
+	std::istream istream(&fb);
+	std::string line;
+	while (std::getline(istream, line))
+	{
+		if (line.empty() || line[0] == '#')
+			continue;
+		auto pos = line.find_first_of("=:");
+		if (pos != std::string::npos)
+			Config[line.substr(0, pos)] = line.substr(pos + 1);
+		else
+			fprintf(stderr, "ERROR: config file syntax error: %s\n", line.c_str());
+	}
+	if (Config.count("REGION") > 0)
+		RegionName = Config["REGION"];
+	if (Config.count("LOBBY") > 0)
+		LobbyName = Config["LOBBY"];
+	if (Config.count("DATABASE") > 0)
+		setDatabasePath(Config["DATABASE"]);
+	else
+		setDatabasePath("vcserver.db");
+	if (Config.count("DISCORD_WEBHOOK") > 0)
+		setDiscordWebhook(Config["DISCORD_WEBHOOK"]);
 }
 
 int main(int argc, char *argv[])
@@ -1334,6 +1374,8 @@ int main(int argc, char *argv[])
 
 	setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
 	printf("VC game server starting\n");
+
+	loadConfig(argc >= 2 ? argv[1] : "vcserver.cfg");
 
 	// ooga, floigan, IGP, 2k2 games
 	Server::Ptr authAcceptor = Server::create(io_context, 11000);
@@ -1378,6 +1420,7 @@ int main(int argc, char *argv[])
 
 	io_context.run();
 
+	closeDatabase();
 	printf("VC game server stopping\n");
 
 	return 0;
