@@ -9,15 +9,15 @@ jobs:
     container: debian:11
 
     steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install git libcurl-dev libasio-dev libsqlite3-dev
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: true
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get -y install libcurl-dev libasio-dev libsqlite3-dev
 
       - name: Build
         run: make
