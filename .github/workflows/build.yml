@@ -1,0 +1,27 @@
+name: vcserver build
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: vcserver
+    runs-on: ubuntu-latest
+    container: debian:11
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install libcurl-dev libasio-dev libsqlite3-dev
+
+      - name: Build
+        run: make
+
+      - uses: actions/upload-artifact@v4
+        with:
+          path: vcserver
