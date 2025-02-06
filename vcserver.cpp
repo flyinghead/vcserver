@@ -401,8 +401,7 @@ private:
 		if (sending)
 			return;
 		sending = true;
-		//printf("OUT: ");
-		//dumpSendMsg();
+		dumpSentMsg();
 		uint16_t packetSize = *(uint16_t *)&sendBuffer[0];
 		asio::async_write(socket, asio::buffer(sendBuffer, packetSize),
 			std::bind(&Connection::onSent, shared_from_this(),
@@ -630,7 +629,7 @@ private:
 			password.clear();
 		}
 		else {
-			printf("key %x username/password: %s/%s\n", key, username.c_str(), password.c_str());
+			printf("key %x username: %s\n", key, username.c_str());
 		}
 		return n;
 	}
@@ -734,7 +733,7 @@ private:
 		int gameId = recvShort(4);
 		std::string username, password;
 		recvLoginPassword(&recvBuffer[8], username, password);
-		printf("Create user: game %d login %s password %s\n", gameId, username.c_str(), password.c_str());
+		printf("Create user: game %d login %s\n", gameId, username.c_str());
 
 		if (!username.empty() && !password.empty())
 		{
@@ -783,7 +782,7 @@ private:
 		n += 2 + state.length();
 		std::string username, password;
 		recvLoginPassword(&recvBuffer[n], username, password);
-		printf("Create user 2k1: login %s password %s city %s state %s\n", username.c_str(), password.c_str(),
+		printf("Create user 2k1: login %s city %s state %s\n", username.c_str(),
 				city.c_str(), state.c_str());
 		respond(5003);
 		if (!username.empty() && !password.empty())
@@ -1209,6 +1208,7 @@ private:
 
 	void dumpMsg()
 	{
+#ifdef DUMP_IN
 		size_t msgLen = *(uint16_t *)&recvBuffer[0];
 		for (size_t i = 0; i < msgLen;)
 		{
@@ -1224,9 +1224,12 @@ private:
 			printf("%s\n", ascii);
 			i += 16;
 		}
+#endif
 	}
-	void dumpSendMsg()
+	void dumpSentMsg()
 	{
+#ifdef DUMP_OUT
+		printf("OUT: ");
 		size_t msgLen = *(uint16_t *)&sendBuffer[0];
 		for (size_t i = 0; i < msgLen;)
 		{
@@ -1242,6 +1245,7 @@ private:
 			printf("%s\n", ascii);
 			i += 16;
 		}
+#endif
 	}
 
 	asio::io_context& io_context;
