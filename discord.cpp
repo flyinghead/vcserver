@@ -18,8 +18,12 @@
 #include "discord.h"
 #include <curl/curl.h>
 #include "json.hpp"
+#include <atomic>
+#include <thread>
+#include <chrono>
 
 static std::string DiscordWebhook;
+static std::atomic_int threadCount;
 
 using namespace nlohmann;
 
@@ -75,13 +79,12 @@ public:
 	} embed;
 };
 
-static void postWebhook(const Notif& notif)
+static void postWebhook(Notif notif)
 {
-	if (DiscordWebhook.empty() || notif.gameType < OOOGABOOGA || notif.gameType >= std::size(Games))
-		return;
 	CURL *curl = curl_easy_init();
 	if (curl == nullptr) {
 		fprintf(stderr, "Can't create curl handle\n");
+		threadCount.fetch_sub(1);
 		return;
 	}
 	CURLcode res;
@@ -106,6 +109,20 @@ static void postWebhook(const Notif& notif)
 	}
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
+	threadCount.fetch_sub(1);
+}
+
+static void discordNotif(const Notif& notif)
+{
+	if (DiscordWebhook.empty() || notif.gameType < OOOGABOOGA || notif.gameType >= std::size(Games))
+		return;
+	if (threadCount.fetch_add(1) > 5) {
+		threadCount.fetch_sub(1);
+		fprintf(stderr, "Discord max thread count reached");
+		return;
+	}
+	std::thread thread(postWebhook, notif);
+	thread.detach();
 }
 
 void setDiscordWebhook(const std::string& url)
@@ -115,12 +132,18 @@ void setDiscordWebhook(const std::string& url)
 
 void discordLobbyJoined(GameType gameType, const std::string& username, const std::vector<std::string>& playerList)
 {
+	using the_clock = std::chrono::steady_clock;
+	static the_clock::time_point last_notif;
+	the_clock::time_point now = the_clock::now();
+	if (last_notif != the_clock::time_point() && now - last_notif < std::chrono::minutes(5))
+		return;
+	last_notif = now;
 	Notif notif(gameType);
 	notif.content = "Player **" + username + "** joined the lobby";
 	notif.embed.title = "Lobby Players";
 	for (const auto& player : playerList)
 		notif.embed.text += player + "\n";
-	postWebhook(notif);
+	discordNotif(notif);
 }
 
 void discordGameCreated(GameType gameType, const std::string& username, const std::vector<std::string>& playerList)
@@ -131,5 +154,5 @@ void discordGameCreated(GameType gameType, const std::string& username, const st
 	for (const auto& player : playerList)
 		notif.embed.text += player + "\n";
 
-	postWebhook(notif);
+	discordNotif(notif);
 }

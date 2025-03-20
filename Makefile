@@ -1,7 +1,7 @@
 # deps: libcurl-dev libasio-dev libsqlite3-dev
 CFLAGS = -O3 -Wall
 #CFLAGS = -g -Wall -fsanitize=address
-CXXFLAGS = $(CFLAGS) -std=c++17 -I/home/raph/flycast-dev-clean/core/deps/asio/asio/include
+CXXFLAGS = $(CFLAGS) -std=c++17
 DEPS = blowfish.h discord.h json.hpp vcserver.h
 USER = dcnet
 INSTALL_DIR = /usr/local/vcserver
