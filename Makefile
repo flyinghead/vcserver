@@ -1,15 +1,15 @@
 # deps: libcurl-dev libasio-dev libsqlite3-dev
-CFLAGS = -O3 -Wall
+CFLAGS = -O3 -g -Wall
 #CFLAGS = -g -Wall -fsanitize=address
 CXXFLAGS = $(CFLAGS) -std=c++17
-DEPS = blowfish.h discord.h json.hpp vcserver.h
+DEPS = blowfish.h discord.h json.hpp vcserver.h log.h
 USER = dcnet
 INSTALL_DIR = /usr/local/vcserver
 
 all: vcserver
 
-vcserver: vcserver.o discord.o blowfish.o db.o
-	$(CXX) $(CXXFLAGS) vcserver.o discord.o blowfish.o db.o -o vcserver -lpthread -lcurl -lsqlite3
+vcserver: vcserver.o discord.o blowfish.o db.o log.o
+	$(CXX) $(CXXFLAGS) vcserver.o discord.o blowfish.o db.o log.o -o vcserver -lpthread -lcurl -lsqlite3
 
 %.o: %.cpp $(DEPS)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<

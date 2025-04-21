@@ -16,6 +16,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "discord.h"
+#include "log.h"
 #include <curl/curl.h>
 #include "json.hpp"
 #include <atomic>
@@ -83,7 +84,7 @@ static void postWebhook(Notif notif)
 {
 	CURL *curl = curl_easy_init();
 	if (curl == nullptr) {
-		fprintf(stderr, "Can't create curl handle\n");
+		ERROR_LOG(notif.gameType, "Can't create curl handle");
 		threadCount.fetch_sub(1);
 		return;
 	}
@@ -98,14 +99,14 @@ static void postWebhook(Notif notif)
 
 	res = curl_easy_perform(curl);
 	if (res != CURLE_OK) {
-		fprintf(stderr, "curl error: %d", res);
+		ERROR_LOG(notif.gameType, "curl error: %d", res);
 	}
 	else
 	{
 		long code;
 		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
 		if (code < 200 || code >= 300)
-			fprintf(stderr, "Discord error: %ld", code);
+			ERROR_LOG(notif.gameType, "Discord error: %ld", code);
 	}
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
@@ -116,9 +117,9 @@ static void discordNotif(const Notif& notif)
 {
 	if (DiscordWebhook.empty() || notif.gameType < OOOGABOOGA || notif.gameType >= std::size(Games))
 		return;
-	if (threadCount.fetch_add(1) > 5) {
+	if (threadCount.fetch_add(1) >= 5) {
 		threadCount.fetch_sub(1);
-		fprintf(stderr, "Discord max thread count reached");
+		ERROR_LOG(notif.gameType, "Discord max thread count reached");
 		return;
 	}
 	std::thread thread(postWebhook, notif);

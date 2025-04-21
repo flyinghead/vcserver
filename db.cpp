@@ -16,6 +16,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "vcserver.h"
+#include "log.h"
 #include <sqlite3.h>
 #include <cstdio>
 #include <cstring>
@@ -34,7 +35,7 @@ static bool openDatabase()
 	if (db != nullptr)
 		return true;
 	if (sqlite3_open(dbPath.c_str(), &db) != SQLITE_OK) {
-		fprintf(stderr, "ERROR: Can't open database %s: %s\n", dbPath.c_str(), sqlite3_errmsg(db));
+		ERROR_LOG(UNKNOWN, "Can't open database %s: %s", dbPath.c_str(), sqlite3_errmsg(db));
 		return false;
 	}
 	sqlite3_busy_timeout(db, 1000);
@@ -129,7 +130,7 @@ std::vector<uint8_t> getUserRecord(const std::string& name, GameType gameType)
 		if (stmt.step())
 			return stmt.getBlobColumn(0);
 	} catch (const std::runtime_error& e) {
-		fprintf(stderr, "ERROR: getUserRecord: %s", e.what());
+		ERROR_LOG(gameType, "getUserRecord: %s", e.what());
 	}
 	return {};
 }
@@ -147,7 +148,7 @@ void saveUserRecord(const std::string& name, GameType gameType, const uint8_t *d
 		if (stmt.changedRows() > 0)
 			return;
 	} catch (const std::runtime_error& e) {
-		fprintf(stderr, "ERROR: saveUserRecord UPDATE: %s", e.what());
+		ERROR_LOG(gameType, "saveUserRecord UPDATE: %s", e.what());
 	}
 	try {
 		Statement stmt(db, "INSERT INTO USER_RECORD (USER_NAME, GAME_TYPE, USER_DATA) VALUES (?, ?, ?)");
@@ -156,7 +157,7 @@ void saveUserRecord(const std::string& name, GameType gameType, const uint8_t *d
 		stmt.bind(3, data, size);
 		stmt.step();
 	} catch (const std::runtime_error& e) {
-		fprintf(stderr, "ERROR: saveUserRecord INSERT: %s", e.what());
+		ERROR_LOG(gameType, "saveUserRecord INSERT: %s", e.what());
 	}
 }
 
@@ -187,7 +188,7 @@ std::vector<HighScore> getHighScores(GameType gameType)
 		if (result.size() > 50)
 			result = std::vector(result.begin(), result.begin() + 50);
 	} catch (const std::runtime_error& e) {
-		fprintf(stderr, "ERROR: getHighScores: %s", e.what());
+		ERROR_LOG(gameType, "getHighScores: %s", e.what());
 	}
 	return result;
 }

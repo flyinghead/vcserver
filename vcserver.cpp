@@ -21,6 +21,7 @@ extern "C" {
 }
 #include "vcserver.h"
 #include "discord.h"
+#include "log.h"
 #include <signal.h>
 #include <asio.hpp>
 #include <stdio.h>
@@ -232,7 +233,7 @@ public:
 					}
 				}
 				userId = (*it)->userId;
-				printf("Lobby: user %s left (ID=%d)\n", (*it)->name.c_str(), userId);
+				INFO_LOG(gameType, "Lobby: user %s left (ID=%d)", (*it)->name.c_str(), userId);
 				(*it)->connection = nullptr;
 				// Delete the user before deleting the game so he doesn't get the update
 				users.erase(it);
@@ -270,7 +271,7 @@ public:
 				return &games.back();
 			}
 		}
-		fprintf(stderr, "ERROR: can't create/update game: host not found\n");
+		ERROR_LOG(gameType, "can't create/update game: host not found");
 		return nullptr;
 	}
 
@@ -280,7 +281,7 @@ public:
 		{
 			if ((user == nullptr || it->host == user) && it->gameId == gameId)
 			{
-				printf("Game %d by host %s deleted\n", gameId, user ? user->name.c_str() : "?");
+				INFO_LOG(gameType, "Game %d by host %s deleted", gameId, user ? user->name.c_str() : "?");
 				games.erase(it);
 				sendGameDelete(gameId);
 				return true;
@@ -323,7 +324,7 @@ public:
 			respByte(0x81);
 		}
 		const User::Ptr& user = lobby->users[idx];
-		printf("Sending user[%d] %s\n", user->userId, user->name.c_str());
+		INFO_LOG(gameType, "Sending user[%d] %s", user->userId, user->name.c_str());
 		respShort(user->userId);
 		respStr(user->name);
 		try {
@@ -412,7 +413,7 @@ private:
 	{
 		if (ec)
 		{
-			fprintf(stderr, "ERROR: onSent: %s\n", ec.message().c_str());
+			ERROR_LOG(gameType, "onSent: %s", ec.message().c_str());
 			lobbyLeave();
 			return;
 		}
@@ -445,16 +446,16 @@ private:
 		if (ec || len == 0)
 		{
 			if (ec && ec != asio::error::eof)
-				fprintf(stderr, "ERROR: onReceive: %s\n", ec.message().c_str());
+				ERROR_LOG(gameType, "onReceive: %s", ec.message().c_str());
 			else
-				printf("Connection closed\n");
+				DEBUG_LOG(gameType, "Connection closed");
 			lobbyLeave();
 			return;
 		}
 		dumpMsg();
 		uint16_t msgLen = recvShort(0);
 		if (len != msgLen)
-			fprintf(stderr, "ERROR: Received %zd bytes but packet len is %d\n", len, msgLen);
+			ERROR_LOG(gameType, "Received %zd bytes but packet len is %d", len, msgLen);
 		uint16_t msgType = recvShort(2);
 		switch (msgType)
 		{
@@ -531,7 +532,7 @@ private:
 		case 10:		// ping? refresh request? respond with 311 or 651 if new user or new game
 			break;
 		default:
-			fprintf(stderr, "TODO: Unknown packet type %04x (len %d)\n", msgType, msgLen);
+			ERROR_LOG(gameType, "TODO: Unknown packet type %04x (len %d)", msgType, msgLen);
 			break;
 		}
 		receive();
@@ -557,7 +558,6 @@ private:
 
 	int recvLoginPassword(uint8_t *data, std::string& username, std::string& password)
 	{
-		printf("keychal %x ", data[1]);
 		int n = data[0] + 1;		// skip key challenge
 
 		uint8_t *puser = &data[n];
@@ -576,7 +576,7 @@ private:
 
 		if (userlen > 16 || passwordlen > 16)
 		{
-			fprintf(stderr, "ERROR: username or password too long (%d, %d)\n", userlen, passwordlen);
+			ERROR_LOG(gameType, "username or password too long (%d, %d)", userlen, passwordlen);
 			username.clear();
 			password.clear();
 			return n;
@@ -624,12 +624,12 @@ private:
 				break;
 		}
 		if (key == 0x100) {
-			fprintf(stderr, "ERROR: can't find the encryption key\n");
+			ERROR_LOG(gameType, "can't find the encryption key");
 			username.clear();
 			password.clear();
 		}
 		else {
-			printf("key %x username: %s\n", key, username.c_str());
+			DEBUG_LOG(gameType, "keychal %x key %x username: %s", data[1], key, username.c_str());
 		}
 		return n;
 	}
@@ -662,12 +662,12 @@ private:
 	void userLogin()
 	{
 		int gameId = recvShort(4);
-		printf("Login: game %d ", gameId);
 		std::string username, password;
 		recvLoginPassword(&recvBuffer[6], username, password);
 
 		if (!username.empty() && !password.empty())
 		{
+			INFO_LOG((GameType)gameId, "Login from %s user %s", address().to_string().c_str(), username.c_str());
 			respond(5013);
 			respShort(0);		// success?
 			respStr(username);
@@ -690,12 +690,12 @@ private:
 		// 2d 00 88 13 04 38 00 00 00 0a 00 16 c7 e6 56 02 f7 1b 70 d1 e3 f8 89 01 e9 d9 95 09 00 b4 0f 5b 01 3a df 05 e1 0e 19 7e 83 70 d1 95 5b
 		// resp: 5003
 		// 10 00 8b 13 01 00 08 00  00 00 00 00 00 00 00 08
-		printf("Login(500x) 2K1 ");
 		std::string username, password;
 		recvLoginPassword(&recvBuffer[4], username, password);
 
 		if (!username.empty() && !password.empty())
 		{
+			INFO_LOG(gameType, "Login(2K1) from %s user %s", address().to_string().c_str(), username.c_str());
 			respond(5003);
 			respShort(1);
 			respShort(8);
@@ -733,7 +733,7 @@ private:
 		int gameId = recvShort(4);
 		std::string username, password;
 		recvLoginPassword(&recvBuffer[8], username, password);
-		printf("Create user: game %d login %s\n", gameId, username.c_str());
+		INFO_LOG((GameType)gameId, "Create user: %s", username.c_str());
 
 		if (!username.empty() && !password.empty())
 		{
@@ -782,7 +782,7 @@ private:
 		n += 2 + state.length();
 		std::string username, password;
 		recvLoginPassword(&recvBuffer[n], username, password);
-		printf("Create user 2k1: login %s city %s state %s\n", username.c_str(),
+		INFO_LOG(gameType, "Create user 2k1: login %s city %s state %s", username.c_str(),
 				city.c_str(), state.c_str());
 		respond(5003);
 		if (!username.empty() && !password.empty())
@@ -809,7 +809,7 @@ private:
 	{
 		// 25 00
 		// 5a 1b 04 14 00 00 00 0c 00 b0 23 b8 09 cf 00 af 48 ad 7c 1f 39 5f c8 49 6d 06 00 f8 42 9f d3 8f 65 8e e0
-		printf("User record: ");
+		DEBUG_LOG(gameType, "User record:");
 		std::string username, password;
 		recvLoginPassword(&recvBuffer[4], username, password);
 		// TODO check username password are valid
@@ -835,7 +835,7 @@ private:
 
 	void recordUpdate()
 	{
-		printf("Record update: ");
+		DEBUG_LOG(gameType, "Record update:");
 		std::string username, password;
 		int n = 4;
 		n += recvLoginPassword(&recvBuffer[n], username, password);
@@ -914,7 +914,7 @@ private:
 		// nfl2k1 resp:
 		// 17 00 a1 0f 01 0a 00 53  68 75 6f 47 61 72 64 65   .......S huoGarde
 	    // 6e 00 00 00 00 00 00
-		printf("Get regions: len %d\n", recvShort(0));
+		DEBUG_LOG(gameType, "Get regions: len %d", recvShort(0));
 		respond(4001);
 		if (is2K1())
 			respByte(1);	// number of regions: { string name, long user count }
@@ -932,7 +932,7 @@ private:
 		// 1b 00 a3 0f 01 08 00 53  68 75 6d 61 6e 69 61 92   .......S humania.
 	    // b9 87 b3 36 b4 00 00 00  00 00 00
 		std::string region = recvStr(&recvBuffer[4]);
-		printf("Get lobby servers: region %s\n", region.c_str());
+		DEBUG_LOG(gameType, "Get lobby servers: region %s", region.c_str());
 
 		respond(4003);
 		if (is2K1()) {
@@ -959,7 +959,7 @@ private:
 		{
 			if (user->name == userName)
 			{
-				printf("Found user: %s\n", userName.c_str());
+				DEBUG_LOG(gameType, "Found user: %s", userName.c_str());
 				if (is2K1()) {
 					respond(401);
 					respLong(1);	// success
@@ -978,7 +978,7 @@ private:
 				return;
 			}
 		}
-		printf("User not found: %s\n", userName.c_str());
+		DEBUG_LOG(gameType, "User not found: %s", userName.c_str());
 		if (is2K1()) {
 			respond(401);
 			respLong(0);	// error
@@ -1008,7 +1008,7 @@ private:
 		uint8_t *record = &recvBuffer[17 + userName.length()];
 		user = lobby->addUser(userName, this, recordSize, record);
 		// record sizes vary: floigan?:0, nfl2k2:20, others:16
-		printf("Enter lobby: user %s record: %d bytes\n", userName.c_str(), recordSize);
+		INFO_LOG(gameType, "Enter lobby: user %s record: %d bytes", userName.c_str(), recordSize);
 
 		if (gameType == OOOGABOOGA) {
 			lobbyUserList();
@@ -1032,7 +1032,7 @@ private:
 		//                                                     user name
 		std::string userName = recvStr(&recvBuffer[17]);
 		user = lobby->addUser(userName, this, 0, nullptr);
-		printf("Enter lobby(2k1): user %s\n", userName.c_str());
+		INFO_LOG(gameType, "Enter lobby(2k1): user %s", userName.c_str());
 		// resp:
 		// 0b 00 59 02 02 00 00 00  00 00 00
 		respond(601);
@@ -1121,7 +1121,7 @@ private:
 		if (game == nullptr)
 			return;
 
-		printf("Game created/updated by %s: type/island %x\n", host.c_str(), recvBuffer[n + 2]);
+		INFO_LOG(gameType, "Game created/updated by %s: type/island %x", host.c_str(), recvBuffer[n + 2]);
 
 		// 0a 00 8f 02 00 00 00 00  01 00
 		respond(655);
@@ -1137,7 +1137,7 @@ private:
 		// 0a 00 90 02 01 00 00 00 01 00
 		int gameId = recvShort(8);
 		if (!lobby->deleteGame(user, gameId))
-			fprintf(stderr, "ERROR: Game by host %s not found\n", user->name.c_str());
+			ERROR_LOG(gameType, "Game by host %s not found", user->name.c_str());
 	}
 
 	void chatSent()
@@ -1147,7 +1147,7 @@ private:
 		// 0b 00 f4 01 01 00 03 00 6c 6f 6c
 		int n = is2K1() ? 6 : 7;
 		std::string chat = recvStr(&recvBuffer[n]);
-		printf("Chat from %s: %s\n", user->name.c_str(), chat.c_str());
+		INFO_LOG(gameType, "%s chat: %s", user->name.c_str(), chat.c_str());
 		lobby->sendChat(user, chat);
 	}
 
@@ -1339,7 +1339,7 @@ static void loadConfig(const std::string& path)
 {
 	std::filebuf fb;
 	if (!fb.open(path, std::ios::in)) {
-		fprintf(stderr, "ERROR: config file %s not found\n", path.c_str());
+		ERROR_LOG(UNKNOWN, "config file %s not found", path.c_str());
 		return;
 	}
 
@@ -1353,7 +1353,7 @@ static void loadConfig(const std::string& path)
 		if (pos != std::string::npos)
 			Config[line.substr(0, pos)] = line.substr(pos + 1);
 		else
-			fprintf(stderr, "ERROR: config file syntax error: %s\n", line.c_str());
+			ERROR_LOG(UNKNOWN, "config file syntax error: %s", line.c_str());
 	}
 	if (Config.count("REGION") > 0)
 		RegionName = Config["REGION"];
@@ -1377,7 +1377,7 @@ int main(int argc, char *argv[])
 	sigaction(SIGTERM, &sigact, NULL);
 
 	setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
-	printf("VC game server starting\n");
+	NOTICE_LOG(UNKNOWN, "VC game server starting");
 
 	loadConfig(argc >= 2 ? argv[1] : "vcserver.cfg");
 
@@ -1425,7 +1425,7 @@ int main(int argc, char *argv[])
 	io_context.run();
 
 	closeDatabase();
-	printf("VC game server stopping\n");
+	NOTICE_LOG(UNKNOWN, "VC game server stopping");
 
 	return 0;
 }
