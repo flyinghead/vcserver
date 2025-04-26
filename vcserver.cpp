@@ -452,7 +452,9 @@ private:
 			lobbyLeave();
 			return;
 		}
+#ifdef DUMP_IN
 		dumpMsg();
+#endif
 		uint16_t msgLen = recvShort(0);
 		if (len != msgLen)
 			ERROR_LOG(gameType, "Received %zd bytes but packet len is %d", len, msgLen);
@@ -1031,6 +1033,14 @@ private:
 		// 20 00 ce 00 00 00 00 00  00 00 00 00 04 1a 00 00 00 06 00 66 6c 79 69 6e  67 03 00 00 00 00 00 00
 		//                                                     user name
 		std::string userName = recvStr(&recvBuffer[17]);
+		if (userName.length() > 16)
+		{
+			ERROR_LOG(gameType, "lobbyRegister2K1: invalid user name: length %zd", userName.length());
+			dumpMsg();
+			std::error_code ec;
+			socket.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
+			return;
+		}
 		user = lobby->addUser(userName, this, 0, nullptr);
 		INFO_LOG(gameType, "Enter lobby(2k1): user %s", userName.c_str());
 		// resp:
@@ -1208,23 +1218,21 @@ private:
 
 	void dumpMsg()
 	{
-#ifdef DUMP_IN
 		size_t msgLen = *(uint16_t *)&recvBuffer[0];
 		for (size_t i = 0; i < msgLen;)
 		{
 			char ascii[17] {};
 			for (int j = 0; j < 16 && i + j < msgLen; j++) {
 				uint8_t b = recvBuffer[i + j];
-				printf("%02x ", b);
+				fprintf(stderr, "%02x ", b);
 				if (b >= ' ' && b < 0x7f)
 					ascii[j] = (char)b;
 				else
 					ascii[j] = '.';
 			}
-			printf("%s\n", ascii);
+			fprintf(stderr, "%s\n", ascii);
 			i += 16;
 		}
-#endif
 	}
 	void dumpSentMsg()
 	{
