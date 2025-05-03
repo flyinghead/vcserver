@@ -26,10 +26,6 @@
 static sqlite3 *db;
 static std::string dbPath;
 
-void setDatabasePath(const std::string& databasePath) {
-	::dbPath = databasePath;
-}
-
 static bool openDatabase()
 {
 	if (db != nullptr)
@@ -48,6 +44,13 @@ void closeDatabase()
 		sqlite3_close(db);
 		db = nullptr;
 	}
+}
+
+void setDatabasePath(const std::string& databasePath) {
+	::dbPath = databasePath;
+	if (!openDatabase())
+		exit(1);
+	closeDatabase();
 }
 
 static void throwSqlError(sqlite3 *db)

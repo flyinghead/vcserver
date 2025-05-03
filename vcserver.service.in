@@ -8,9 +8,8 @@ Type=simple
 Restart=always
 RestartSec=1
 User=INSTALL_USER
-WorkingDirectory=INSTALL_DIR
-ExecStart=INSTALL_DIR/vcserver
-StandardOutput=append:INSTALL_DIR/vcserver.log
+ExecStart=SBINDIR/vcserver SYSCONFDIR/vcserver.cfg
+StandardOutput=append:/var/log/vcserver.log
 
 [Install]
 WantedBy=multi-user.target

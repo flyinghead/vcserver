@@ -1,10 +1,15 @@
-# deps: libcurl-dev libasio-dev libsqlite3-dev
+#
+# dependencies: libcurl-dev libasio-dev libsqlite3-dev
+#
+prefix = /usr/local
+exec_prefix = $(prefix)
+sbindir = $(exec_prefix)/sbin
+sysconfdir = $(prefix)/etc
 CFLAGS = -O3 -g -Wall
 #CFLAGS = -g -Wall -fsanitize=address
 CXXFLAGS = $(CFLAGS) -std=c++17
 DEPS = blowfish.h discord.h json.hpp vcserver.h log.h
 USER = dcnet
-INSTALL_DIR = /usr/local/vcserver
 
 all: vcserver
 
@@ -18,21 +23,24 @@ vcserver: vcserver.o discord.o blowfish.o db.o log.o
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f vcserver *.o
+	rm -f vcserver *.o vcserver.service
 
 install: all
-	install -o $(USER) -g $(USER) -d $(INSTALL_DIR)
-	install --strip -o $(USER) -g $(USER) vcserver $(INSTALL_DIR)
+	mkdir -p $(DESTDIR)$(sbindir)
+	install vcserver $(DESTDIR)$(sbindir)
+	mkdir -p $(DESTDIR)$(sysconfdir)
+	cp -n vcserver.cfg $(DESTDIR)$(sysconfdir)
 
 vcserver.service: vcserver.service.in Makefile
 	cp vcserver.service.in vcserver.service
-	sed -e "s/INSTALL_USER/$(USER)/g" -e "s:INSTALL_DIR:$(INSTALL_DIR):g" < $< > $@
+	sed -e "s/INSTALL_USER/$(USER)/g" -e "s:SBINDIR:$(sbindir):g" -e "s:SYSCONFDIR:$(sysconfdir):g" < $< > $@
 
 installservice: vcserver.service
-	install -o root -g root -d /usr/local/lib/systemd/
-	install -m 0644 -o root -g root $< /usr/local/lib/systemd/
-	systemctl enable /usr/local/lib/systemd/vcserver.service
+	mkdir -p /usr/lib/systemd/system/
+	cp $< /usr/lib/systemd/system/
+	systemctl enable vcserver.service
 
 createdb:
-	sqlite3 $(INSTALL_DIR)/vcserver.db < createdb.sql
-	chown $(USER):$(USER) $(INSTALL_DIR)/vcserver.db
+	mkdir -p /var/lib/vcserver/
+	sqlite3 /var/lib/vcserver/vcserver.db < createdb.sql
+	chown $(USER):$(USER) /var/lib/vcserver/vcserver.db

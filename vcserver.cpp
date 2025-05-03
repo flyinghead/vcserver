@@ -307,10 +307,11 @@ public:
 		return socket;
 	}
 
-	void receive() {
-		recvBuffer.clear();	// FIXME do we have to handle more than 1 msg per buffer?
-		asio::async_read_until(socket, asio::dynamic_vector_buffer(recvBuffer), packetMatcher,
-				std::bind(&Connection::onReceive, shared_from_this(), asio::placeholders::error, asio::placeholders::bytes_transferred));
+	void start()
+	{
+		asio::socket_base::keep_alive option(true);
+		socket.set_option(option);
+		receive();
 	}
 
 	void sendUser(int idx)
@@ -424,6 +425,12 @@ private:
 			memmove(&sendBuffer[0], &sendBuffer[len], sendIdx);
 			sendInternal();
 		}
+	}
+
+	void receive() {
+		recvBuffer.clear();	// FIXME do we have to handle more than 1 msg per buffer?
+		asio::async_read_until(socket, asio::dynamic_vector_buffer(recvBuffer), packetMatcher,
+				std::bind(&Connection::onReceive, shared_from_this(), asio::placeholders::error, asio::placeholders::bytes_transferred));
 	}
 
 	using iterator = asio::buffers_iterator<asio::const_buffers_1>;
@@ -1328,7 +1335,7 @@ private:
 	void handleAccept(Connection::Ptr newConnection, const std::error_code& error)
 	{
 		if (!error)
-			newConnection->receive();
+			newConnection->start();
 		start();
 	}
 
@@ -1348,6 +1355,7 @@ static void loadConfig(const std::string& path)
 	std::filebuf fb;
 	if (!fb.open(path, std::ios::in)) {
 		ERROR_LOG(UNKNOWN, "config file %s not found", path.c_str());
+		setDatabasePath("./vcserver.db");
 		return;
 	}
 
@@ -1370,7 +1378,7 @@ static void loadConfig(const std::string& path)
 	if (Config.count("DATABASE") > 0)
 		setDatabasePath(Config["DATABASE"]);
 	else
-		setDatabasePath("vcserver.db");
+		setDatabasePath("./vcserver.db");
 	if (Config.count("DISCORD_WEBHOOK") > 0)
 		setDiscordWebhook(Config["DISCORD_WEBHOOK"]);
 }
