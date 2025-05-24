@@ -51,7 +51,7 @@ void logger(Log::LEVEL level, GameType game, const char *file, int line, const c
 		logger(Log::INFO, game, __FILE__, __LINE__, __VA_ARGS__);    \
 	} while (0)
 
-#ifdef DEBUG
+#ifndef NDEBUG
 #define DEBUG_LOG(game, ...)                      \
 	do {                                    \
 		logger(Log::DEBUG, game, __FILE__, __LINE__, __VA_ARGS__);    \

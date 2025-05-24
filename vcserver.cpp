@@ -943,6 +943,26 @@ private:
 		std::string region = recvStr(&recvBuffer[4]);
 		DEBUG_LOG(gameType, "Get lobby servers: region %s", region.c_str());
 
+		std::string lobbyName = LobbyName;
+		unsigned port = 1;
+		if (gameType == IGP)
+		{
+			lobbyName +=  " " + region;
+			if (region == "Poker")
+				port = 1;
+			else if (region == "Dominoes")
+				port = 2;
+			else if (region == "Othello") {
+				port = 3;
+				lobbyName = LobbyName + " Reversi";
+			}
+			else if (region == "Spades")
+				port = 4;
+			else if (region == "Go")
+				port = 5;
+			else if (region == "Chess")
+				port = 6;
+		}
 		respond(4003);
 		if (is2K1()) {
 			respByte(1);
@@ -951,10 +971,10 @@ private:
 			respShort(0);
 			respByte(0x81);
 		}
-		respStr(LobbyName);
+		respStr(lobbyName);
 		// ip address, port
 		respData(socket.local_endpoint().address().to_v4().to_bytes());
-		respShort(htons(socket.local_endpoint().port() + 1));
+		respShort(htons(socket.local_endpoint().port() + port));
 		respShort(lobby->users.size());
 		respSkip(4);
 		send();
@@ -1410,11 +1430,22 @@ int main(int argc, char *argv[])
 	{
 		auto lobby = std::make_shared<Lobby>((GameType)i);
 		lobbies.push_back(lobby);
+		// region server
 		servers.push_back(Server::create(io_context, 15003 + i * 100, lobby));
 		servers.back()->start();
+		// lobby server
 		servers.push_back(Server::create(io_context, 15004 + i * 100, lobby));
 		servers.back()->start();
+		if (i == IGP)
+		{
+			// create one lobby server per game
+			for (int j = 1; j < 6; j++) {
+				servers.push_back(Server::create(io_context, 15004 + i * 100 + j, lobby));
+				servers.back()->start();
+			}
+		}
 		if (i != FLOIGAN) {
+			// record server
 			servers.push_back(Server::create(io_context, 12001 + i * 100, lobby));
 			servers.back()->start();
 		}

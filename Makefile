@@ -5,7 +5,7 @@ prefix = /usr/local
 exec_prefix = $(prefix)
 sbindir = $(exec_prefix)/sbin
 sysconfdir = $(prefix)/etc
-CFLAGS = -O3 -g -Wall
+CFLAGS = -O3 -g -Wall -DNDEBUG
 #CFLAGS = -g -Wall -fsanitize=address
 CXXFLAGS = $(CFLAGS) -std=c++17
 DEPS = blowfish.h discord.h json.hpp vcserver.h log.h
