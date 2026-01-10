@@ -126,7 +126,7 @@ static void discordNotif(const Notif& notif)
 	thread.detach();
 }
 
-void setDiscordWebhook(const std::string& url)
+void discordSetWebhook(const std::string& url)
 {
 	DiscordWebhook = url;
 }

@@ -2,3 +2,6 @@
 /vcserver
 /vcserver.db
 /vcserver.service
+/build/
+/.cproject
+/.project

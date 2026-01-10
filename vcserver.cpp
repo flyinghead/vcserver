@@ -148,7 +148,7 @@ class Connection;
 
 class User : public SharedThis<User>
 {
-	User(const std::string& name, Connection *connection, uint16_t userId, uint16_t recSize, uint8_t *record)
+	User(const std::string& name, Connection *connection, uint16_t userId, uint16_t recSize, const uint8_t *record)
 		: name(name), connection(connection), userId(userId)
 	{
 		this->record.resize(recSize);
@@ -168,13 +168,13 @@ class Game
 {
 public:
 	Game() = default;
-	Game(User::Ptr host, uint16_t paramSize, uint8_t *params, uint16_t gameId)
+	Game(User::Ptr host, uint16_t paramSize, const uint8_t *params, uint16_t gameId)
 		: host(host), gameId(gameId)
 	{
 		setParams(paramSize, params);
 	}
 
-	void setParams(uint16_t paramSize, uint8_t *params) {
+	void setParams(uint16_t paramSize, const uint8_t *params) {
 		this->params.resize(paramSize);
 		memcpy(this->params.data(), params, this->params.size());
 	}
@@ -215,7 +215,7 @@ class Lobby
 public:
 	Lobby(GameType gameType) : gameType(gameType) {}
 
-	User::Ptr addUser(const std::string& name, Connection *connection, uint16_t recSize, uint8_t *record);
+	User::Ptr addUser(const std::string& name, Connection *connection, uint16_t recSize, const uint8_t *record);
 
 	void deleteUser(Connection *connection)
 	{
@@ -246,7 +246,7 @@ public:
 			sendUserLeave(userId);
 	}
 
-	Game *updateGame(Connection *connection, const std::string& hostname, uint16_t paramSize, uint8_t *params, uint16_t unknown)
+	Game *updateGame(Connection *connection, const std::string& hostname, uint16_t paramSize, const uint8_t *params, uint16_t unknown)
 	{
 		Game *game = findGame(connection, hostname);
 		if (game != nullptr) {
@@ -298,6 +298,26 @@ public:
 	GameType gameType;
 	std::vector<User::Ptr> users;
 	std::vector<Game> games;
+};
+
+class DynamicBuffer
+{
+public:
+	using const_buffers_type = asio::ASIO_CONST_BUFFER;
+	using mutable_buffers_type = asio::ASIO_MUTABLE_BUFFER;
+
+	size_t size() const { return dynBuffer.size(); }
+	size_t max_size() const { return dynBuffer.max_size(); }
+	size_t capacity() const { return dynBuffer.capacity(); }
+	const_buffers_type data() const { return dynBuffer.data(); }
+	mutable_buffers_type prepare(size_t size) { return dynBuffer.prepare(size); }
+	void commit(size_t n) { dynBuffer.commit(n); }
+	void consume(size_t n) { dynBuffer.consume(n); }
+	const uint8_t *bytes() const { return &vector[0]; }
+
+private:
+	std::vector<uint8_t> vector;
+	asio::dynamic_vector_buffer<uint8_t, std::vector<uint8_t>::allocator_type> dynBuffer{vector};
 };
 
 class Connection : public SharedThis<Connection>
@@ -428,8 +448,7 @@ private:
 	}
 
 	void receive() {
-		recvBuffer.clear();	// FIXME do we have to handle more than 1 msg per buffer?
-		asio::async_read_until(socket, asio::dynamic_vector_buffer(recvBuffer), packetMatcher,
+		asio::async_read_until(socket, recvBuffer, packetMatcher,
 				std::bind(&Connection::onReceive, shared_from_this(), asio::placeholders::error, asio::placeholders::bytes_transferred));
 	}
 
@@ -544,6 +563,7 @@ private:
 			ERROR_LOG(gameType, "TODO: Unknown packet type %04x (len %d)", msgType, msgLen);
 			break;
 		}
+		recvBuffer.consume(len);
 		receive();
 	}
 
@@ -565,19 +585,19 @@ private:
 		return true;
 	}
 
-	int recvLoginPassword(uint8_t *data, std::string& username, std::string& password)
+	int recvLoginPassword(const uint8_t *data, std::string& username, std::string& password)
 	{
 		int n = data[0] + 1;		// skip key challenge
 
-		uint8_t *puser = &data[n];
-		uint16_t userlen = *(uint16_t *)puser;
+		const uint8_t *puser = &data[n];
+		uint16_t userlen = *(const uint16_t *)puser;
 		n += 2;
 		int cuserlen = (userlen + 7) / 8 * 8;
 		n += cuserlen;
 		uint8_t tmpuser[18];
 
-		uint8_t *ppassword = &data[n];
-		uint16_t passwordlen = *(uint16_t *)ppassword;
+		const uint8_t *ppassword = &data[n];
+		uint16_t passwordlen = *(const uint16_t *)ppassword;
 		n += 2;
 		int cpasswordlen = (passwordlen + 7) / 8 * 8;
 		n += cpasswordlen;
@@ -672,7 +692,7 @@ private:
 	{
 		int gameId = recvShort(4);
 		std::string username, password;
-		recvLoginPassword(&recvBuffer[6], username, password);
+		recvLoginPassword(recvBuffer.bytes() + 6, username, password);
 
 		if (!username.empty() && !password.empty())
 		{
@@ -700,7 +720,7 @@ private:
 		// resp: 5003
 		// 10 00 8b 13 01 00 08 00  00 00 00 00 00 00 00 08
 		std::string username, password;
-		recvLoginPassword(&recvBuffer[4], username, password);
+		recvLoginPassword(recvBuffer.bytes() + 4, username, password);
 
 		if (!username.empty() && !password.empty())
 		{
@@ -741,7 +761,7 @@ private:
 		// 7d
 		int gameId = recvShort(4);
 		std::string username, password;
-		recvLoginPassword(&recvBuffer[8], username, password);
+		recvLoginPassword(recvBuffer.bytes() + 8, username, password);
 		INFO_LOG((GameType)gameId, "Create user: %s", username.c_str());
 
 		if (!username.empty() && !password.empty())
@@ -790,7 +810,7 @@ private:
 		std::string state = recvStr(n);
 		n += 2 + state.length();
 		std::string username, password;
-		recvLoginPassword(&recvBuffer[n], username, password);
+		recvLoginPassword(recvBuffer.bytes() + n, username, password);
 		INFO_LOG(gameType, "Create user 2k1: login %s city %s state %s", username.c_str(),
 				city.c_str(), state.c_str());
 		respond(5003);
@@ -820,7 +840,7 @@ private:
 		// 5a 1b 04 14 00 00 00 0c 00 b0 23 b8 09 cf 00 af 48 ad 7c 1f 39 5f c8 49 6d 06 00 f8 42 9f d3 8f 65 8e e0
 		DEBUG_LOG(gameType, "User record:");
 		std::string username, password;
-		recvLoginPassword(&recvBuffer[4], username, password);
+		recvLoginPassword(recvBuffer.bytes() + 4, username, password);
 		// TODO check username password are valid
 		std::vector<uint8_t> record = getUserRecord(username, gameType);
 		respond(7003);
@@ -847,11 +867,12 @@ private:
 		DEBUG_LOG(gameType, "Record update:");
 		std::string username, password;
 		int n = 4;
-		n += recvLoginPassword(&recvBuffer[n], username, password);
+		const uint8_t *data = recvBuffer.bytes();
+		n += recvLoginPassword(&data[n], username, password);
 		// TODO check username password are valid
 		uint16_t recordSize = recvShort(n);
 		n += 2;
-		saveUserRecord(username, gameType, &recvBuffer[n], recordSize);
+		saveUserRecord(username, gameType, &data[n], recordSize);
 		// when game starts
 		// 2f 00 5e 1b 04 3f 00 00 00 07 00 25 a4 49 15 96 3a 3a 7d 06 00 ee 34 49 5c 6b 1a d4 30
 		//             l  key chal    len   encrypted               len   encrypted           ...
@@ -875,7 +896,7 @@ private:
 		// nba2k2 sends 3 longs
 		// IGP sends 4 or 5 (wins,losses,drops,rating,awards?) * 6 (games) longs? -> 120 bytes
 		respShort(recordSize);
-		respBytes(&recvBuffer[n], recordSize);
+		respBytes(&data[n], recordSize);
 		send();
 	}
 
@@ -940,7 +961,7 @@ private:
 		// nfl2k1 resp:
 		// 1b 00 a3 0f 01 08 00 53  68 75 6d 61 6e 69 61 92   .......S humania.
 	    // b9 87 b3 36 b4 00 00 00  00 00 00
-		std::string region = recvStr(&recvBuffer[4]);
+		std::string region = recvStr(recvBuffer.bytes() + 4);
 		DEBUG_LOG(gameType, "Get lobby servers: region %s", region.c_str());
 
 		std::string lobbyName = LobbyName;
@@ -983,7 +1004,7 @@ private:
 	void findUser()
 	{
 		// 0c 00 32 00 06 00 61 62 63 64 65 66 ..2...abcdef
-		std::string userName = recvStr(&recvBuffer[4]);
+		std::string userName = recvStr(recvBuffer.bytes() + 4);
 		for (const User::Ptr& user : lobby->users)
 		{
 			if (user->name == userName)
@@ -1032,9 +1053,9 @@ private:
 
 	void lobbyRegister()
 	{
-		std::string userName = recvStr(&recvBuffer[13]);
+		std::string userName = recvStr(recvBuffer.bytes() + 13);
 		uint16_t recordSize = recvShort(15 + userName.length());
-		uint8_t *record = &recvBuffer[17 + userName.length()];
+		const uint8_t *record = recvBuffer.bytes() + 17 + userName.length();
 		user = lobby->addUser(userName, this, recordSize, record);
 		// record sizes vary: floigan?:0, nfl2k2:20, others:16
 		INFO_LOG(gameType, "Enter lobby: user %s record: %d bytes", userName.c_str(), recordSize);
@@ -1059,7 +1080,7 @@ private:
 		// nba 2k1
 		// 20 00 ce 00 00 00 00 00  00 00 00 00 04 1a 00 00 00 06 00 66 6c 79 69 6e  67 03 00 00 00 00 00 00
 		//                                                     user name
-		std::string userName = recvStr(&recvBuffer[17]);
+		std::string userName = recvStr(recvBuffer.bytes() + 17);
 		if (userName.length() > 16)
 		{
 			ERROR_LOG(gameType, "lobbyRegister2K1: invalid user name: length %zd", userName.length());
@@ -1150,15 +1171,16 @@ private:
 		//
 		// 01 02 05 00 00 00 00 41 00 00 00 00 .......A....
 		//   rd time,
-		std::string host = recvStr(&recvBuffer[8]);
+		const uint8_t *data = recvBuffer.bytes();
+		std::string host = recvStr(&data[8]);
 		int n = 18 + host.length();
 		int paramSize = recvShort(n);
 		n += 2;
-		Game *game = lobby->updateGame(this, host, paramSize, &recvBuffer[n], recvShort(n + paramSize));
+		Game *game = lobby->updateGame(this, host, paramSize, &data[n], recvShort(n + paramSize));
 		if (game == nullptr)
 			return;
 
-		INFO_LOG(gameType, "Game created/updated by %s: type/island %x", host.c_str(), recvBuffer[n + 2]);
+		INFO_LOG(gameType, "Game created/updated by %s: type/island %x", host.c_str(), data[n + 2]);
 
 		// 0a 00 8f 02 00 00 00 00  01 00
 		respond(655);
@@ -1183,7 +1205,7 @@ private:
 		// 2k1:
 		// 0b 00 f4 01 01 00 03 00 6c 6f 6c
 		int n = is2K1() ? 6 : 7;
-		std::string chat = recvStr(&recvBuffer[n]);
+		std::string chat = recvStr(recvBuffer.bytes() + n);
 		INFO_LOG(gameType, "%s chat: %s", user->name.c_str(), chat.c_str());
 		lobby->sendChat(user, chat);
 	}
@@ -1210,7 +1232,7 @@ private:
 		*(uint32_t *)&sendBuffer[sendIdx] = v;
 		sendIdx += 4;
 	}
-	void respBytes(uint8_t *data, int size)
+	void respBytes(const uint8_t *data, int size)
 	{
 		memcpy(&sendBuffer[sendIdx], data, size);
 		sendIdx += size;
@@ -1232,11 +1254,11 @@ private:
 		return std::string(data + 2, data + 2 + len);
 	}
 	std::string recvStr(size_t offset) {
-		return recvStr(&recvBuffer[offset]);
+		return recvStr(recvBuffer.bytes() + offset);
 	}
 
 	uint16_t recvShort(size_t offset) {
-		return *(uint16_t *)&recvBuffer[offset];
+		return *(uint16_t *)&recvBuffer.bytes()[offset];
 	}
 
 	asio::ip::address_v4 address() {
@@ -1245,12 +1267,12 @@ private:
 
 	void dumpMsg()
 	{
-		size_t msgLen = *(uint16_t *)&recvBuffer[0];
+		size_t msgLen = *(uint16_t *)recvBuffer.bytes();
 		for (size_t i = 0; i < msgLen;)
 		{
 			char ascii[17] {};
 			for (int j = 0; j < 16 && i + j < msgLen; j++) {
-				uint8_t b = recvBuffer[i + j];
+				uint8_t b = recvBuffer.bytes()[i + j];
 				fprintf(stderr, "%02x ", b);
 				if (b >= ' ' && b < 0x7f)
 					ascii[j] = (char)b;
@@ -1285,7 +1307,7 @@ private:
 
 	asio::io_context& io_context;
 	asio::ip::tcp::socket socket;
-	std::vector<uint8_t> recvBuffer;
+	DynamicBuffer recvBuffer;
 	std::array<uint8_t, 1024> sendBuffer;
 	size_t sendIdx = 0;
 	bool sending = false;
@@ -1298,7 +1320,7 @@ private:
 	friend super;
 };
 
-User::Ptr Lobby::addUser(const std::string& name, Connection *connection, uint16_t recSize, uint8_t *record)
+User::Ptr Lobby::addUser(const std::string& name, Connection *connection, uint16_t recSize, const uint8_t *record)
 {
 	users.push_back(User::create(name, connection, nextUserId(), recSize, record));
 	for (size_t i = 0; i < users.size() - 1; i++)
@@ -1400,7 +1422,7 @@ static void loadConfig(const std::string& path)
 	else
 		setDatabasePath("./vcserver.db");
 	if (Config.count("DISCORD_WEBHOOK") > 0)
-		setDiscordWebhook(Config["DISCORD_WEBHOOK"]);
+		discordSetWebhook(Config["DISCORD_WEBHOOK"]);
 }
 
 int main(int argc, char *argv[])
