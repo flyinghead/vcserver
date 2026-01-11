@@ -1,5 +1,5 @@
 #
-# dependencies: libcurl-dev libasio-dev libsqlite3-dev
+# dependencies: libasio-dev libsqlite3-dev libdcserver.so
 #
 prefix = /usr/local
 exec_prefix = $(prefix)
@@ -8,13 +8,13 @@ sysconfdir = $(prefix)/etc
 CFLAGS = -O3 -g -Wall -DNDEBUG
 #CFLAGS = -g -Wall -fsanitize=address
 CXXFLAGS = $(CFLAGS) -std=c++17
-DEPS = blowfish.h discord.h json.hpp vcserver.h log.h
+DEPS = blowfish.h discord.h vcserver.h log.h
 USER = dcnet
 
 all: vcserver
 
 vcserver: vcserver.o discord.o blowfish.o db.o log.o
-	$(CXX) $(CXXFLAGS) vcserver.o discord.o blowfish.o db.o log.o -o vcserver -lpthread -lcurl -lsqlite3
+	$(CXX) $(CXXFLAGS) vcserver.o discord.o blowfish.o db.o log.o -o vcserver -lpthread -lsqlite3 -ldcserver -Wl,-rpath,/usr/local/lib
 
 %.o: %.cpp $(DEPS)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<

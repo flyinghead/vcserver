@@ -20,6 +20,6 @@
 #include <string>
 #include <vector>
 
-void discordSetWebhook(const std::string& url);
+std::string getGameId(GameType gameType);
 void discordLobbyJoined(GameType gameType, const std::string& username, const std::vector<std::string>& playerList);
 void discordGameCreated(GameType gameType, const std::string& username, const std::vector<std::string>& playerList);

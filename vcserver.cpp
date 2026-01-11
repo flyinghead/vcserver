@@ -15,32 +15,27 @@
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
-#include "shared_this.h"
 extern "C" {
 #include "blowfish.h"
 }
 #include "vcserver.h"
 #include "discord.h"
 #include "log.h"
+#include <dcserver/shared_this.hpp>
+#include <dcserver/asio.hpp>
+#include <dcserver/status.hpp>
 #include <signal.h>
 #include <asio.hpp>
 #include <stdio.h>
 #include <string>
 #include <array>
 #include <vector>
+#include <map>
 #include <functional>
 #include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
-
-#if ASIO_VERSION < 102900
-namespace asio::placeholders
-{
-static inline constexpr auto& error = std::placeholders::_1;
-static inline constexpr auto& bytes_transferred = std::placeholders::_2;
-}
-#endif
 
 // server IP: 146.185.135.179
 //            92  b9  87  b3
@@ -290,6 +285,13 @@ public:
 		return false;
 	}
 
+	void getStatus(GameType& gameType, int& playerCount, int& gameCount)
+	{
+		gameType = this->gameType;
+		playerCount = users.size();
+		gameCount = games.size();
+	}
+
 	void sendChat(const User::Ptr& user, const std::string& chatMsg);
 	void sendGameUpdate(const Game& game, User::Ptr exceptTo = {});
 	void sendGameDelete(uint16_t gameId);
@@ -298,26 +300,6 @@ public:
 	GameType gameType;
 	std::vector<User::Ptr> users;
 	std::vector<Game> games;
-};
-
-class DynamicBuffer
-{
-public:
-	using const_buffers_type = asio::ASIO_CONST_BUFFER;
-	using mutable_buffers_type = asio::ASIO_MUTABLE_BUFFER;
-
-	size_t size() const { return dynBuffer.size(); }
-	size_t max_size() const { return dynBuffer.max_size(); }
-	size_t capacity() const { return dynBuffer.capacity(); }
-	const_buffers_type data() const { return dynBuffer.data(); }
-	mutable_buffers_type prepare(size_t size) { return dynBuffer.prepare(size); }
-	void commit(size_t n) { dynBuffer.commit(n); }
-	void consume(size_t n) { dynBuffer.consume(n); }
-	const uint8_t *bytes() const { return &vector[0]; }
-
-private:
-	std::vector<uint8_t> vector;
-	asio::dynamic_vector_buffer<uint8_t, std::vector<uint8_t>::allocator_type> dynBuffer{vector};
 };
 
 class Connection : public SharedThis<Connection>
@@ -1388,6 +1370,55 @@ private:
 	friend super;
 };
 
+class StatusUpdater
+{
+public:
+	StatusUpdater(asio::io_context& io_context, const std::vector<std::shared_ptr<Lobby>>& lobbies)
+		: io_context(io_context), lobbies(lobbies), timer(io_context)
+	{
+	}
+
+	void start() {
+		onTimer({});
+	}
+
+	void onTimer(const std::error_code& ec)
+	{
+		if (ec)
+			return;
+		struct Status
+		{
+			int playerCount = 0;
+			int gameCount = 0;
+		};
+		std::map<GameType, Status> statuses;
+		for (auto lobby : lobbies)
+		{
+			GameType gameType;
+			int playerCount;
+			int gameCount;
+			lobby->getStatus(gameType, playerCount, gameCount);
+			Status& status = statuses[gameType];
+			status.playerCount += playerCount;
+			status.gameCount += gameCount;
+		}
+		for (const auto&[gameType, status] : statuses)
+			statusUpdate(getGameId(gameType), status.playerCount, status.gameCount);
+		try {
+			statusCommit("vcserver");
+		} catch (const std::exception& e) {
+			ERROR_LOG(UNKNOWN, "statusCommit failed: %s", e.what());
+		}
+		timer.expires_at(asio::chrono::steady_clock::now() + asio::chrono::seconds(statusGetInterval()));
+		timer.async_wait(std::bind(&StatusUpdater::onTimer, this, asio::placeholders::error));
+	}
+
+private:
+	asio::io_context& io_context;
+	std::vector<std::shared_ptr<Lobby>> lobbies;
+	asio::steady_timer timer;
+};
+
 static void breakhandler(int signum) {
 	io_context.stop();
 }
@@ -1421,8 +1452,6 @@ static void loadConfig(const std::string& path)
 		setDatabasePath(Config["DATABASE"]);
 	else
 		setDatabasePath("./vcserver.db");
-	if (Config.count("DISCORD_WEBHOOK") > 0)
-		discordSetWebhook(Config["DISCORD_WEBHOOK"]);
 }
 
 int main(int argc, char *argv[])
@@ -1491,9 +1520,11 @@ int main(int argc, char *argv[])
 	servers.push_back(Server::create(io_context, 14504, lobby));
 	servers.back()->start();
 
+	StatusUpdater statusUpdater(io_context, lobbies);
+	statusUpdater.start();
+
 	io_context.run();
 
-	closeDatabase();
 	NOTICE_LOG(UNKNOWN, "VC game server stopping");
 
 	return 0;
