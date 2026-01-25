@@ -36,7 +36,7 @@ static const char *GameIds[] {
 
 std::string getGameId(GameType gameType)
 {
-	if (gameType < OOOGABOOGA || gameType >= std::size(GameIds))
+	if (gameType < OOGABOOGA || gameType >= std::size(GameIds))
 		return {};
 	else
 		return GameIds[gameType];
@@ -44,7 +44,7 @@ std::string getGameId(GameType gameType)
 
 void discordLobbyJoined(GameType gameType, const std::string& username, const std::vector<std::string>& playerList)
 {
-	if (gameType < OOOGABOOGA || gameType >= std::size(GameIds))
+	if (gameType < OOGABOOGA || gameType >= std::size(GameIds))
 		return;
 	using the_clock = std::chrono::steady_clock;
 	static the_clock::time_point last_notif;
@@ -66,7 +66,7 @@ void discordLobbyJoined(GameType gameType, const std::string& username, const st
 
 void discordGameCreated(GameType gameType, const std::string& username, const std::vector<std::string>& playerList)
 {
-	if (gameType < OOOGABOOGA || gameType >= std::size(GameIds))
+	if (gameType < OOGABOOGA || gameType >= std::size(GameIds))
 		return;
 	Notif notif;
 	notif.content = "Player **" + discordEscape(username) + "** created a game";

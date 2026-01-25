@@ -23,7 +23,7 @@
 enum GameType
 {
 	UNKNOWN = 1,
-	OOOGABOOGA = 2,
+	OOGABOOGA = 2,
 	IGP = 3,
 	FLOIGAN = 4,
 	WSB2K2 = 5,

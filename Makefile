@@ -5,11 +5,13 @@ prefix = /usr/local
 exec_prefix = $(prefix)
 sbindir = $(exec_prefix)/sbin
 sysconfdir = $(prefix)/etc
-CFLAGS = -O3 -g -Wall -DNDEBUG
-#CFLAGS = -g -Wall -fsanitize=address
+localstatedir = /var/local
+CFLAGS = -Wall -g "-DLOCALSTATEDIR=\"$(localstatedir)\""
+CFLAGS += -O3 -DNDEBUG
+#CFLAGS += -fsanitize=address
 CXXFLAGS = $(CFLAGS) -std=c++17
 DEPS = blowfish.h discord.h vcserver.h log.h
-USER = dcnet
+user = dcnet
 
 all: vcserver
 
@@ -32,15 +34,15 @@ install: all
 	cp -n vcserver.cfg $(DESTDIR)$(sysconfdir)
 
 vcserver.service: vcserver.service.in Makefile
-	cp vcserver.service.in vcserver.service
-	sed -e "s/INSTALL_USER/$(USER)/g" -e "s:SBINDIR:$(sbindir):g" -e "s:SYSCONFDIR:$(sysconfdir):g" < $< > $@
+	sed -e "s/INSTALL_USER/$(user)/g" -e "s:SBINDIR:$(sbindir):g" -e "s:SYSCONFDIR:$(sysconfdir):g" -e "s:LOCALSTATEDIR:$(localstatedir):g" < $< > $@
 
 installservice: vcserver.service
+	mkdir -p $(localstatedir)/log
 	mkdir -p /usr/lib/systemd/system/
 	cp $< /usr/lib/systemd/system/
 	systemctl enable vcserver.service
 
 createdb:
-	mkdir -p /var/lib/vcserver/
-	sqlite3 /var/lib/vcserver/vcserver.db < createdb.sql
-	chown $(USER):$(USER) /var/lib/vcserver/vcserver.db
+	mkdir -p $(localstatedir)/lib/vcserver/
+	sqlite3 $(localstatedir)/lib/vcserver/vcserver.db < createdb.sql
+	chown $(user):$(user) $(localstatedir)/lib/vcserver/vcserver.db

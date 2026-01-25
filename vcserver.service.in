@@ -9,7 +9,7 @@ Restart=always
 RestartSec=1
 User=INSTALL_USER
 ExecStart=SBINDIR/vcserver SYSCONFDIR/vcserver.cfg
-StandardOutput=append:/var/log/vcserver.log
+StandardOutput=append:LOCALSTATEDIR/log/vcserver.log
 
 [Install]
 WantedBy=multi-user.target

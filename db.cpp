@@ -30,7 +30,7 @@ void setDatabasePath(const std::string& databasePath) {
 	try {
 		Database db(dbPath);
 	} catch (const std::exception& e) {
-	    ERROR_LOG(UNKNOWN, "Can't open database %s: %s", dbPath.c_str(), e.what());
+	    ERROR_LOG(UNKNOWN, "Database error: %s", e.what());
 	    exit(1);
 	}
 }

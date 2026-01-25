@@ -868,7 +868,7 @@ private:
 		// 18 00
 		// 5b 1b 01 00 10 00  00 00 00 00 01 00 00 00 00 00 00 00 01 00 00 00
 		respond(7003);
-		if (gameType == OOOGABOOGA)
+		if (gameType == OOGABOOGA)
 			// oogabooga returns 1 here
 			respShort(1);
 		else
@@ -1042,7 +1042,7 @@ private:
 		// record sizes vary: floigan?:0, nfl2k2:20, others:16
 		INFO_LOG(gameType, "Enter lobby: user %s record: %d bytes", userName.c_str(), recordSize);
 
-		if (gameType == OOOGABOOGA) {
+		if (gameType == OOGABOOGA) {
 			lobbyUserList();
 		}
 		else
@@ -1403,7 +1403,7 @@ public:
 			status.gameCount += gameCount;
 		}
 		for (const auto&[gameType, status] : statuses)
-			statusUpdate(getGameId(gameType), status.playerCount, status.gameCount);
+			statusUpdate(getGameId(gameType), status.playerCount, gameType == OOGABOOGA ? status.gameCount : -1);
 		try {
 			statusCommit("vcserver");
 		} catch (const std::exception& e) {
@@ -1451,7 +1451,7 @@ static void loadConfig(const std::string& path)
 	if (Config.count("DATABASE") > 0)
 		setDatabasePath(Config["DATABASE"]);
 	else
-		setDatabasePath("./vcserver.db");
+		setDatabasePath(LOCALSTATEDIR "/lib/vcserver/vcserver.db");
 }
 
 int main(int argc, char *argv[])
@@ -1477,7 +1477,7 @@ int main(int argc, char *argv[])
 	// region server port is 15003 + gameType * 100
 	// and we set the lobby port at 15004 + gameType * 100
 	std::vector<Server::Ptr> servers;
-	for (int i = OOOGABOOGA; i <= NCAA2K2; i++)
+	for (int i = OOGABOOGA; i <= NCAA2K2; i++)
 	{
 		auto lobby = std::make_shared<Lobby>((GameType)i);
 		lobbies.push_back(lobby);
