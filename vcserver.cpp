@@ -37,6 +37,8 @@ extern "C" {
 #include <sstream>
 #include <unordered_map>
 
+using namespace std::chrono_literals;
+
 // server IP: 146.185.135.179
 //            92  b9  87  b3
 // OOGA BOOGA
@@ -211,35 +213,7 @@ public:
 	Lobby(GameType gameType) : gameType(gameType) {}
 
 	User::Ptr addUser(const std::string& name, Connection *connection, uint16_t recSize, const uint8_t *record);
-
-	void deleteUser(Connection *connection)
-	{
-		uint16_t userId = 0;
-		for (auto it = users.begin(); it != users.end(); ++it)
-		{
-			if ((*it)->connection == connection)
-			{
-				// Find if the user is hosting a game
-				uint16_t gameId = 0;
-				for (auto gameIt = games.begin(); gameIt != games.end(); ++gameIt) {
-					if (gameIt->host == *it) {
-						gameId = gameIt->gameId;
-						break;
-					}
-				}
-				userId = (*it)->userId;
-				INFO_LOG(gameType, "Lobby: user %s left (ID=%d)", (*it)->name.c_str(), userId);
-				(*it)->connection = nullptr;
-				// Delete the user before deleting the game so he doesn't get the update
-				users.erase(it);
-				if (gameId != 0)
-					deleteGame(nullptr, gameId);
-				break;
-			}
-		}
-		if (userId != 0)
-			sendUserLeave(userId);
-	}
+	void deleteUser(Connection *connection);
 
 	Game *updateGame(Connection *connection, const std::string& hostname, uint16_t paramSize, const uint8_t *params, uint16_t unknown)
 	{
@@ -252,7 +226,8 @@ public:
 		}
 		for (auto& user : users)
 		{
-			if (user->connection == connection) {	// IGP uses "CREATE GAME" as host name
+			if (user->connection == connection)	// IGP uses "CREATE GAME" as host name
+			{
 				games.emplace_back(user, paramSize, params, nextGameId());
 				games.back().unknown = unknown;
 				sendGameUpdate(games.back(), user);
@@ -262,6 +237,7 @@ public:
 					userNames.push_back(user->name);
 				std::sort(userNames.begin(), userNames.end());
 				discordGameCreated(gameType, user->name, userNames);
+				status::createGame(getGameId(gameType));
 
 				return &games.back();
 			}
@@ -279,17 +255,11 @@ public:
 				INFO_LOG(gameType, "Game %d by host %s deleted", gameId, user ? user->name.c_str() : "?");
 				games.erase(it);
 				sendGameDelete(gameId);
+				status::deleteGame(getGameId(gameType));
 				return true;
 			}
 		}
 		return false;
-	}
-
-	void getStatus(GameType& gameType, int& playerCount, int& gameCount)
-	{
-		gameType = this->gameType;
-		playerCount = users.size();
-		gameCount = games.size();
 	}
 
 	void sendChat(const User::Ptr& user, const std::string& chatMsg);
@@ -313,6 +283,8 @@ public:
 	{
 		asio::socket_base::keep_alive option(true);
 		socket.set_option(option);
+		ipAddress = address().to_string();
+		port = socket.remote_endpoint().port();
 		receive();
 	}
 
@@ -383,6 +355,9 @@ public:
 		respShort(userId);
 		send();
 	}
+
+	const std::string& getIpAddress() const { return ipAddress; }
+	int getPort() const { return port; }
 
 private:
 	Connection(asio::io_context& io_context, std::shared_ptr<Lobby> lobby)
@@ -1298,6 +1273,8 @@ private:
 	std::shared_ptr<Lobby> lobby;
 	User::Ptr user;
 	GameType gameType;
+	std::string ipAddress;
+	int port;
 
 	friend super;
 };
@@ -1307,7 +1284,38 @@ User::Ptr Lobby::addUser(const std::string& name, Connection *connection, uint16
 	users.push_back(User::create(name, connection, nextUserId(), recSize, record));
 	for (size_t i = 0; i < users.size() - 1; i++)
 		users[i]->connection->sendUser(users.size() - 1);
+	status::join(getGameId(gameType), connection->getIpAddress(), connection->getPort(), name);
 	return users.back();
+}
+
+void Lobby::deleteUser(Connection *connection)
+{
+	uint16_t userId = 0;
+	for (auto it = users.begin(); it != users.end(); ++it)
+	{
+		if ((*it)->connection == connection)
+		{
+			// Find if the user is hosting a game
+			uint16_t gameId = 0;
+			for (auto gameIt = games.begin(); gameIt != games.end(); ++gameIt) {
+				if (gameIt->host == *it) {
+					gameId = gameIt->gameId;
+					break;
+				}
+			}
+			status::leave(getGameId(gameType), connection->getIpAddress(), connection->getPort(), (*it)->name);
+			userId = (*it)->userId;
+			INFO_LOG(gameType, "Lobby: user %s left (ID=%d)", (*it)->name.c_str(), userId);
+			(*it)->connection = nullptr;
+			// Delete the user before deleting the game so he doesn't get the update
+			users.erase(it);
+			if (gameId != 0)
+				deleteGame(nullptr, gameId);
+			break;
+		}
+	}
+	if (userId != 0)
+		sendUserLeave(userId);
 }
 
 void Lobby::sendChat(const User::Ptr& srcUser, const std::string& chatMsg) {
@@ -1386,30 +1394,11 @@ public:
 	{
 		if (ec)
 			return;
-		struct Status
-		{
-			int playerCount = 0;
-			int gameCount = 0;
-		};
-		std::map<GameType, Status> statuses;
-		for (auto lobby : lobbies)
-		{
-			GameType gameType;
-			int playerCount;
-			int gameCount;
-			lobby->getStatus(gameType, playerCount, gameCount);
-			Status& status = statuses[gameType];
-			status.playerCount += playerCount;
-			status.gameCount += gameCount;
-		}
-		for (const auto&[gameType, status] : statuses)
-			statusUpdate(getGameId(gameType), status.playerCount, gameType == OOGABOOGA ? status.gameCount : -1);
-		try {
-			statusCommit("vcserver");
-		} catch (const std::exception& e) {
-			ERROR_LOG(UNKNOWN, "statusCommit failed: %s", e.what());
-		}
-		timer.expires_at(asio::chrono::steady_clock::now() + asio::chrono::seconds(statusGetInterval()));
+		if (timer.expiry().time_since_epoch() == 0ms)
+			status::reset("vcserver");
+		else
+			status::ping("vcserver");
+		timer.expires_after(asio::chrono::seconds(status::pingInterval()));
 		timer.async_wait(std::bind(&StatusUpdater::onTimer, this, asio::placeholders::error));
 	}
 
